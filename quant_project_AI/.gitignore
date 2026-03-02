@@ -1,0 +1,52 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.spyproject/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Project-specific
+*.zip
+data/**/*.csv
+data/**/*.parquet
+data/**/*.arrow
+*.db
+*.db-shm
+*.db-wal
+paper_trading.db*
+
+# Outputs
+output/
+output_*.csv
+results/
+catboost_info/
+*.xlsx
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

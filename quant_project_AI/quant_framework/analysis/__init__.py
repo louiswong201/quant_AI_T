@@ -1,0 +1,41 @@
+"""Performance analysis module — unified metrics API."""
+
+from .performance import (
+    PerformanceAnalyzer,
+    analyze_trades,
+    annual_return,
+    annual_volatility,
+    calmar_ratio,
+    conditional_var,
+    deflated_sharpe_ratio,
+    max_drawdown,
+    max_drawdown_duration,
+    omega_ratio,
+    profit_factor,
+    sharpe_ratio,
+    sortino_ratio,
+    tail_ratio,
+    total_return,
+    value_at_risk,
+    win_rate,
+)
+
+__all__ = [
+    "PerformanceAnalyzer",
+    "analyze_trades",
+    "annual_return",
+    "annual_volatility",
+    "calmar_ratio",
+    "conditional_var",
+    "deflated_sharpe_ratio",
+    "max_drawdown",
+    "max_drawdown_duration",
+    "omega_ratio",
+    "profit_factor",
+    "sharpe_ratio",
+    "sortino_ratio",
+    "tail_ratio",
+    "total_return",
+    "value_at_risk",
+    "win_rate",
+]
