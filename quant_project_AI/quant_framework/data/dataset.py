@@ -123,7 +123,7 @@ class Dataset:
                     lf = lf.filter(pl.col("date") <= pl.lit(pd.Timestamp(end_date)))
                 if columns is not None:
                     need = list(dict.fromkeys(["date"] + columns))
-                    lf = lf.select([c for c in need if c in lf.collect_schema().names()])
+                    lf = lf.select([c for c in need if c in lf.schema.names()])
                 return lf.sort("date")
 
         df = self.load(symbol, start_date or "", end_date or "")
@@ -151,7 +151,7 @@ class Dataset:
                     lf = lf.filter(pl.col("date") >= pl.lit(pd.Timestamp(start_date)))
                 if end_date:
                     lf = lf.filter(pl.col("date") <= pl.lit(pd.Timestamp(end_date)))
-                available = lf.collect_schema().names()
+                available = lf.schema.names()
                 lf = lf.select([c for c in cols if c in available]).sort("date")
                 frame = lf.collect()
                 return {

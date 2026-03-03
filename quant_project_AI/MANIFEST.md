@@ -18,10 +18,9 @@ Total packages: 20
   ✓ quant_framework/backtest/order_manager.py
   ✓ quant_framework/backtest/protocols.py
 
-## 02_backtest_support.zip  (9 files, 24 KB)
+## 02_backtest_support.zip  (8 files, 24 KB)
 
   ✓ quant_framework/backtest/bias_detector.py
-  ✓ quant_framework/backtest/kernels_backup.py
   ✓ quant_framework/backtest/manifest.py
   ✓ quant_framework/backtest/robust.py
   ✓ quant_framework/backtest/tca.py

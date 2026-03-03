@@ -40,8 +40,8 @@ class DriftRegimeStrategy(BaseStrategy):
         self.drift_threshold = drift_threshold
         self.hold_period = hold_period
         self._min_lookback = lookback + 1
-        self._hold_count = 0
-        self._entry_bar = -1
+        self._hold_count: Dict[str, int] = {}
+        self._entry_bar: Dict[str, int] = {}
 
     @property
     def kernel_name(self) -> str:
@@ -75,11 +75,11 @@ class DriftRegimeStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         # 检查持有期平仓
-        if holdings != 0 and self._entry_bar >= 0:
-            self._hold_count += 1
-            if self._hold_count >= self.hold_period:
-                self._hold_count = 0
-                self._entry_bar = -1
+        if holdings != 0 and self._entry_bar.get(symbol, -1) >= 0:
+            self._hold_count[symbol] = self._hold_count.get(symbol, 0) + 1
+            if self._hold_count.get(symbol, 0) >= self.hold_period:
+                self._hold_count[symbol] = 0
+                self._entry_bar[symbol] = -1
                 if holdings > 0:
                     return {"action": "sell", "symbol": symbol, "shares": holdings}
                 # 注意：框架暂不支持空头平仓（buy to cover），用 hold 代替
@@ -89,10 +89,10 @@ class DriftRegimeStrategy(BaseStrategy):
         if holdings == 0:
             if up_ratio <= (1.0 - self.drift_threshold):
                 # 漂移过低 → 做多（反转上涨）
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
-                    self._entry_bar = i
-                    self._hold_count = 0
+                    self._entry_bar[symbol] = i
+                    self._hold_count[symbol] = 0
                     return {"action": "buy", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}
@@ -122,21 +122,21 @@ class DriftRegimeStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         # 持有期平仓
-        if holdings != 0 and self._entry_bar >= 0:
-            self._hold_count += 1
-            if self._hold_count >= self.hold_period:
-                self._hold_count = 0
-                self._entry_bar = -1
+        if holdings != 0 and self._entry_bar.get(symbol, -1) >= 0:
+            self._hold_count[symbol] = self._hold_count.get(symbol, 0) + 1
+            if self._hold_count.get(symbol, 0) >= self.hold_period:
+                self._hold_count[symbol] = 0
+                self._entry_bar[symbol] = -1
                 if holdings > 0:
                     return {"action": "sell", "symbol": symbol, "shares": holdings}
                 return {"action": "hold"}
 
         # 做多信号
         if holdings == 0 and up_ratio <= (1.0 - self.drift_threshold):
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
-                self._entry_bar = n - 1
-                self._hold_count = 0
+                self._entry_bar[symbol] = n - 1
+                self._hold_count[symbol] = 0
                 return {"action": "buy", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}

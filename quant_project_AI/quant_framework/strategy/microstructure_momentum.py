@@ -165,8 +165,8 @@ class MicrostructureMomentum(BaseStrategy):
             yz_window,
             atr_period,
         ) + 5
-        self._trailing_stop: Optional[float] = None
-        self._last_vpin: float = 0.0
+        self._trailing_stop: Dict[str, Optional[float]] = {}
+        self._last_vpin: Dict[str, float] = {}
 
     @property
     def fast_columns(self) -> Tuple[str, ...]:
@@ -182,6 +182,7 @@ class MicrostructureMomentum(BaseStrategy):
         close: np.ndarray,
         volume: np.ndarray,
         i: int,
+        symbol: str = "STOCK",
     ) -> Tuple[float, float, float, float, float]:
         """Compute all signals at bar i.
 
@@ -196,8 +197,11 @@ class MicrostructureMomentum(BaseStrategy):
 
         # 1. OFI and its rate-of-change (flow acceleration)
         ofi = _ofi_numba(h, l, c, v, self.ofi_window)
-        ofi_roc = _ofi_roc_kernel(ofi, self.ofi_roc_period)
-        ofi_roc_val = ofi_roc[i] if not np.isnan(ofi_roc[i]) else 0.0
+        try:
+            ofi_roc = _ofi_roc_kernel(ofi, self.ofi_roc_period)
+            ofi_roc_val = ofi_roc[i] if not np.isnan(ofi_roc[i]) else 0.0
+        except (ZeroDivisionError, FloatingPointError):
+            ofi_roc_val = 0.0
 
         # 2. VPIN — informed trading probability
         vpin = _vpin_numba(c, v, self.vpin_buckets)
@@ -207,9 +211,9 @@ class MicrostructureMomentum(BaseStrategy):
                 vpin_val = vpin[j]
                 break
         if np.isnan(vpin_val):
-            vpin_val = self._last_vpin
+            vpin_val = self._last_vpin.get(symbol, 0.0)
         else:
-            self._last_vpin = vpin_val
+            self._last_vpin[symbol] = vpin_val
 
         # 3. Yang-Zhang vol for Goldilocks gate
         yz = _yang_zhang_vol_numba(o, h, l, c, self.yz_window)
@@ -269,18 +273,18 @@ class MicrostructureMomentum(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         ofi_roc, vpin_val, yz_ann, vov_val, atr_val = self._compute_signal(
-            open_, high, low, close, volume, i,
+            open_, high, low, close, volume, i, symbol,
         )
 
         # Adaptive trailing stop management
-        if holdings > 0 and self._trailing_stop is not None:
-            if price <= self._trailing_stop:
-                self._trailing_stop = None
+        if holdings > 0 and self._trailing_stop.get(symbol) is not None:
+            if price <= self._trailing_stop[symbol]:
+                self._trailing_stop[symbol] = None
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
             stop_dist = self._adaptive_stop_distance(atr_val, vov_val)
             new_stop = price - stop_dist
-            if new_stop > self._trailing_stop:
-                self._trailing_stop = new_stop
+            if new_stop > self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = new_stop
 
         # Entry conditions:
         #   1. OFI accelerating (buying pressure increasing)
@@ -295,12 +299,12 @@ class MicrostructureMomentum(BaseStrategy):
                 shares = self._inverse_vol_size(price, yz_ann)
                 if shares > 0 and self.can_buy(symbol, price, shares):
                     stop_dist = self._adaptive_stop_distance(atr_val, vov_val)
-                    self._trailing_stop = price - stop_dist
+                    self._trailing_stop[symbol] = price - stop_dist
                     return {"action": "buy", "symbol": symbol, "shares": shares}
 
         # Exit on OFI reversal (flow decelerating sharply)
         if holdings > 0 and ofi_roc < -self.entry_ofi_roc:
-            self._trailing_stop = None
+            self._trailing_stop[symbol] = None
             return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         return {"action": "hold"}

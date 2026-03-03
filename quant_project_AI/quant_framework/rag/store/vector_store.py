@@ -22,7 +22,7 @@
 
 优化 3: 磁盘持久化（save / load）
   旧方案：程序重启后所有向量丢失
-  新方案：用 numpy.save 把向量矩阵存到文件，用 pickle 存 chunk 元数据
+  新方案：用 numpy.save 把向量矩阵存到文件，用 json 存 chunk 元数据
   原理：向量是纯数字矩阵，numpy 二进制格式读写极快（比 JSON 快 100x+）
 
 优化 4: TTL 过期淘汰
@@ -31,9 +31,11 @@
   原理：新闻类场景中，3 天前的新闻价值远低于今天的
 """
 
+import json
+import logging
 import os
-import pickle
 import time
+from pathlib import Path
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
@@ -43,6 +45,8 @@ import numpy as np
 
 from ..core import vector_search_batch_topk, vector_search_topk
 from ..types import Chunk
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStore(ABC):
@@ -219,29 +223,69 @@ class InMemoryVectorStore(VectorStore):
 
     # ── 持久化 ──────────────────────────────────────────────
 
+    def _validate_path(self, directory: str) -> None:
+        """Validate path does not contain path traversal."""
+        if ".." in Path(directory).parts:
+            raise ValueError(f"Invalid path (no '..'): {directory}")
+
     def save(self, directory: str) -> None:
         """把向量矩阵和 chunk 元数据保存到磁盘。
 
         为什么分两个文件？
         - vectors.npy: 纯数字矩阵，用 numpy 二进制格式，读写极快
-        - chunks.pkl: Python 对象（Chunk 列表），用 pickle 序列化
+        - chunks.json: Chunk 元数据，用 JSON 序列化（安全，无 pickle 风险）
         分开的好处：向量文件可以被其他工具（如 FAISS）直接读取。
         """
+        self._validate_path(directory)
         os.makedirs(directory, exist_ok=True)
         with self._lock:
-            np.save(os.path.join(directory, "vectors.npy"), self._vectors[:self._size])
-            with open(os.path.join(directory, "chunks.pkl"), "wb") as f:
-                pickle.dump((self._chunks[:], self._timestamps[:]), f)
+            vec_path = os.path.join(directory, "vectors.npy")
+            chunk_path = os.path.join(directory, "chunks.json")
+            np.save(vec_path, self._vectors[:self._size])
+            payload = {
+                "chunks": [
+                    {
+                        "text": c.text,
+                        "chunk_id": c.chunk_id,
+                        "doc_id": c.doc_id,
+                        "index": c.index,
+                        "embedding": c.embedding,
+                        "metadata": c.metadata,
+                    }
+                    for c in self._chunks
+                ],
+                "timestamps": self._timestamps[:],
+            }
+            with open(chunk_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, default=str)
 
     def load(self, directory: str) -> None:
         """从磁盘加载之前保存的向量和元数据。"""
+        self._validate_path(directory)
         vec_path = os.path.join(directory, "vectors.npy")
-        chunk_path = os.path.join(directory, "chunks.pkl")
-        if not os.path.exists(vec_path) or not os.path.exists(chunk_path):
+        chunk_path = os.path.join(directory, "chunks.json")
+        if not os.path.exists(vec_path):
             return
-        vecs = np.load(vec_path)
-        with open(chunk_path, "rb") as f:
-            chunks, timestamps = pickle.load(f)
+        vecs = np.load(vec_path, allow_pickle=False)
+        chunks = []
+        timestamps = []
+        if os.path.exists(chunk_path):
+            with open(chunk_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            chunks = [
+                Chunk(
+                    text=d["text"],
+                    chunk_id=d["chunk_id"],
+                    doc_id=d["doc_id"],
+                    index=d["index"],
+                    embedding=d.get("embedding"),
+                    metadata=d.get("metadata", {}),
+                )
+                for d in payload["chunks"]
+            ]
+            timestamps = payload.get("timestamps", [])
+        else:
+            return
         with self._lock:
             n = vecs.shape[0]
             self._capacity = max(n, 1024)

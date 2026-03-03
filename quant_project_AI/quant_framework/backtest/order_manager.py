@@ -118,3 +118,10 @@ class DefaultOrderManager:
     @property
     def all_orders(self) -> List[Order]:
         return self._all_orders
+
+    def get_order(self, order_id: str) -> Optional[Order]:
+        """O(1) order lookup by ID."""
+        idx = self._index.get(order_id)
+        if idx is not None and idx < len(self._all_orders):
+            return self._all_orders[idx]
+        return None

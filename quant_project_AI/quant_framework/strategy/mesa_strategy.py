@@ -180,7 +180,7 @@ class MESAStrategy(BaseStrategy):
         # MAMA 上穿 FAMA → 做多
         if mama[idx] > fama[idx] and mama[idx - 1] <= fama[idx - 1]:
             if holdings == 0:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
         # MAMA 下穿 FAMA → 平仓

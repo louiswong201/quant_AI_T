@@ -195,7 +195,7 @@ class AdaptiveRegimeEnsemble(BaseStrategy):
         self.sigmoid_scale = sigmoid_scale
         self.max_risk_pct = max_risk_pct
         self._min_lookback = max(vol_slow, yz_window, er_period, zscore_window) + 5
-        self._trailing_stop: Optional[float] = None
+        self._trailing_stop: Dict[str, Optional[float]] = {}
 
     @property
     def fast_columns(self) -> Tuple[str, ...]:
@@ -313,24 +313,24 @@ class AdaptiveRegimeEnsemble(BaseStrategy):
             return {"action": "hold"}
 
         # Trailing stop check
-        if holdings > 0 and self._trailing_stop is not None:
-            if price <= self._trailing_stop:
-                self._trailing_stop = None
+        if holdings > 0 and self._trailing_stop.get(symbol) is not None:
+            if price <= self._trailing_stop[symbol]:
+                self._trailing_stop[symbol] = None
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
             new_stop = price - self.atr_stop_mult * atr_val
-            if new_stop > self._trailing_stop:
-                self._trailing_stop = new_stop
+            if new_stop > self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = new_stop
 
         # Entry
         if holdings == 0 and score > self.entry_threshold:
             shares = self._inverse_vol_size(price, yz_vol)
             if shares > 0 and self.can_buy(symbol, price, shares):
-                self._trailing_stop = price - self.atr_stop_mult * atr_val
+                self._trailing_stop[symbol] = price - self.atr_stop_mult * atr_val
                 return {"action": "buy", "symbol": symbol, "shares": shares}
 
         # Signal-based exit
         if holdings > 0 and score < -self.exit_threshold:
-            self._trailing_stop = None
+            self._trailing_stop[symbol] = None
             return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         return {"action": "hold"}

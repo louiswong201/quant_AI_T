@@ -285,6 +285,7 @@ class LorentzianClassificationStrategy(BaseStrategy):
         self._feature_caches: Dict[str, np.ndarray] = {}
         self._label_caches: Dict[str, np.ndarray] = {}
         self._cache_ns: Dict[str, int] = {}
+        self._max_cache_symbols = 50
 
     @property
     def fast_columns(self) -> Tuple[str, ...]:
@@ -484,6 +485,11 @@ class LorentzianClassificationStrategy(BaseStrategy):
         else:
             features = self._compute_features(c, h, l)
             labels = self._compute_labels(c)
+            if len(self._feature_caches) > self._max_cache_symbols:
+                oldest = next(iter(self._feature_caches))
+                del self._feature_caches[oldest]
+                del self._label_caches[oldest]
+                del self._cache_ns[oldest]
             self._feature_caches[symbol] = features
             self._label_caches[symbol] = labels
             self._cache_ns[symbol] = n
@@ -513,7 +519,7 @@ class LorentzianClassificationStrategy(BaseStrategy):
             return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         if prediction == 1 and holdings == 0:
-            shares = self.calculate_position_size(price, risk_percent=0.9)
+            shares = self.calculate_position_size(price, capital_fraction=0.9)
             if shares > 0 and self.can_buy(symbol, price, shares):
                 self._stop_prices[symbol] = price - self.atr_stop_mult * current_atr if current_atr > 0 else None
                 return {"action": "buy", "symbol": symbol, "shares": shares}

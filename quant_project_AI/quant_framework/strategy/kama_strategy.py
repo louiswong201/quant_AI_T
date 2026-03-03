@@ -133,7 +133,7 @@ class KAMAStrategy(BaseStrategy):
 
         # 开仓：价格在 KAMA 上方且 KAMA 上行
         if holdings == 0 and current_price > k_now and k_now > k_prev:
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {"action": "buy", "symbol": symbol, "shares": shares}
 

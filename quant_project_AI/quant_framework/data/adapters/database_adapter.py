@@ -80,29 +80,36 @@ class DatabaseDataAdapter(BaseDataAdapter):
             logger.exception("加载数据失败: %s", e)
             return None
     
-    def save_data(self, symbol: str, data: pd.DataFrame, if_exists: str = "replace") -> bool:
-        """Save data to database (保存数据到数据库)."""
+    def save_data(self, symbol: str, data: pd.DataFrame, if_exists: str = "append") -> bool:
+        """Save data to database (保存数据到数据库).
+
+        Default changed to 'append' with pre-delete of existing rows for the
+        symbol so that other symbols' data in the same table is preserved.
+        """
         try:
-            # 确保有symbol列
             if 'symbol' not in data.columns:
                 data = data.copy()
                 data['symbol'] = symbol
-            
-            # 确保日期列为datetime类型
+
             if 'date' in data.columns:
                 data['date'] = pd.to_datetime(data['date'])
-            
-            # 保存到数据库
+
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text(f"DELETE FROM {self.table_name} WHERE symbol = :symbol"),
+                    {"symbol": symbol},
+                )
+
             data.to_sql(
                 self.table_name,
                 self.engine,
                 if_exists=if_exists,
                 index=False,
-                method='multi'  # 批量插入
+                method='multi',
             )
-            
+
             return True
-            
+
         except SQLAlchemyError as e:
             logger.exception("数据库保存错误: %s", e)
             return False

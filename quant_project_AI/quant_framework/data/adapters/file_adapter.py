@@ -130,8 +130,29 @@ class FileDataAdapter(BaseDataAdapter):
         return sorted(symbols)
     
     def get_latest_date(self, symbol: str) -> Optional[datetime]:
-        """Get latest data date (获取最新数据日期)."""
-        df = self.load_data(symbol, "2000-01-01", "2099-12-31")
-        if df is not None and not df.empty:
-            return df['date'].max()
+        """Get latest data date without loading full dataset."""
+        formats = [self.preferred_format, "parquet", "csv", "hdf5"]
+        for fmt in formats:
+            file_path = self._get_file_path(symbol, fmt)
+            if not os.path.exists(file_path):
+                continue
+            try:
+                if fmt == "parquet":
+                    import pyarrow.parquet as pq
+                    table = pq.read_table(file_path, columns=['date'])
+                    if table.num_rows == 0:
+                        return None
+                    return pd.Timestamp(table.column('date')[-1].as_py())
+                elif fmt == "csv":
+                    df = pd.read_csv(file_path, usecols=['date'], parse_dates=['date'])
+                    if df.empty:
+                        return None
+                    return df['date'].max()
+                else:
+                    df = self.load_data(symbol, "2000-01-01", "2099-12-31")
+                    if df is not None and not df.empty:
+                        return df['date'].max()
+                    return None
+            except Exception:
+                continue
         return None

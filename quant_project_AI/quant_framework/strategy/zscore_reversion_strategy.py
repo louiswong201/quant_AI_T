@@ -88,12 +88,14 @@ class ZScoreReversionStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         if holdings > 0:
-            if z > -self.exit_z or z <= -self.stop_z:
+            if abs(z) < self.exit_z:
+                return {"action": "sell", "symbol": symbol, "shares": holdings}
+            if z < -self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         if holdings == 0:
             if z < -self.entry_z:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
 
@@ -122,11 +124,13 @@ class ZScoreReversionStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         if holdings > 0:
-            if z > -self.exit_z or z <= -self.stop_z:
+            if abs(z) < self.exit_z:
+                return {"action": "sell", "symbol": symbol, "shares": holdings}
+            if z < -self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         if holdings == 0 and z < -self.entry_z:
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {"action": "buy", "symbol": symbol, "shares": shares}
 

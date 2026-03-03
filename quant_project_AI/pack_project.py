@@ -22,7 +22,6 @@ PACKS = {
     ],
     "02_backtest_support": [
         "quant_framework/backtest/bias_detector.py",
-        "quant_framework/backtest/kernels_backup.py",
         "quant_framework/backtest/manifest.py",
         "quant_framework/backtest/robust.py",
         "quant_framework/backtest/tca.py",

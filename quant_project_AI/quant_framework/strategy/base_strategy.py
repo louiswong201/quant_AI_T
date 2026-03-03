@@ -10,6 +10,8 @@ import pandas as pd
 if TYPE_CHECKING:
     from ..data.rag_context import RagContextProvider
 
+DEFAULT_CAPITAL_FRACTION = 0.95
+
 
 class BaseStrategy(ABC):
     """策略基类。支持单标的（data 为 DataFrame）与多标的（data 为 Dict[symbol, DataFrame]）。"""
@@ -101,19 +103,20 @@ class BaseStrategy(ABC):
         """
         return None
     
-    def calculate_position_size(self, price: float, risk_percent: float = 0.02) -> int:
-        """
-        计算仓位大小
-        
+    def calculate_position_size(self, price: float, capital_fraction: float = DEFAULT_CAPITAL_FRACTION) -> int:
+        """Calculate the number of shares to buy.
+
         Args:
-            price: 股票价格
-            risk_percent: 风险百分比（默认2%）
-            
+            price: Current share price.
+            capital_fraction: Fraction of portfolio value to allocate
+                (0.0–1.0). For example 0.95 means "invest 95% of
+                portfolio value". Defaults to DEFAULT_CAPITAL_FRACTION.
+
         Returns:
-            应该买入的股数
+            Number of shares (floored to int, minimum 0).
         """
-        risk_amount = self.portfolio_value * risk_percent
-        shares = int(risk_amount / price)
+        amount = self.portfolio_value * capital_fraction
+        shares = int(amount / price)
         return max(0, shares)
     
     def can_buy(self, symbol: str, price: float, shares: int) -> bool:

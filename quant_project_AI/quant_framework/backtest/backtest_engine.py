@@ -37,11 +37,6 @@ logger = logging.getLogger(__name__)
 
 from ..strategy.base_strategy import BaseStrategy
 from ..data.data_manager import DataManager
-from ..live.replay import (
-    analyze_execution_divergence,
-    export_execution_diagnostics_bundle,
-    export_execution_divergence_report,
-)
 from .config import BacktestConfig
 from .fill_simulator import CostModelFillSimulator
 from .kernels import KERNEL_REGISTRY, config_to_kernel_costs, eval_kernel, eval_kernel_detailed
@@ -74,30 +69,6 @@ def _rolling_vol(close: np.ndarray, window: int) -> np.ndarray:
     for i in range(window, n):
         out[i] = np.std(ret[i - window + 1: i + 1])
     return out
-
-
-class _TruncatedDFView:
-    """Lightweight proxy that avoids copying the DataFrame on every bar.
-
-    Wraps a full DataFrame but makes len() and iloc[-1] behave as if the
-    DataFrame only has rows [0..end_idx]. Only falls back to real slicing
-    if the strategy accesses a pattern we don't intercept.
-    """
-
-    __slots__ = ("_df", "_end")
-
-    def __init__(self, df: pd.DataFrame, end_idx: int) -> None:
-        self._df = df
-        self._end = end_idx + 1
-
-    def __len__(self) -> int:
-        return self._end
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._df.iloc[: self._end], name)
-
-    def __getitem__(self, key: Any) -> Any:
-        return self._df.iloc[: self._end][key]
 
 
 def _cheap_truncated_view(df: pd.DataFrame, i: int) -> pd.DataFrame:
@@ -615,7 +586,7 @@ class BacktestEngine:
             )
             if raw is None:
                 df = data_by_symbol[sym]
-                view = df.iloc[: i + 1] if len(df) < 5000 else _cheap_truncated_view(df, i)
+                view = df.iloc[: i + 1]
                 raw = strategy.on_bar(view, current_date)
         else:
             raw = (
@@ -629,7 +600,7 @@ class BacktestEngine:
                 hist = {}
                 for s in data_by_symbol:
                     df = data_by_symbol[s]
-                    hist[s] = df.iloc[: i + 1] if len(df) < 5000 else _cheap_truncated_view(df, i)
+                    hist[s] = df.iloc[: i + 1]
                 raw = strategy.on_bar(hist, current_date, current_prices=current_prices)
         return _normalize_signals(raw)
 
@@ -678,6 +649,11 @@ class BacktestEngine:
             and live_fills is not None
             and not trades_df.empty
         ):
+            from ..live.replay import (
+                analyze_execution_divergence,
+                export_execution_diagnostics_bundle,
+                export_execution_divergence_report,
+            )
             execution_divergence = analyze_execution_divergence(trades_df, live_fills)
             execution_report_path = export_execution_divergence_report(
                 execution_divergence, self.config.execution_report_path,

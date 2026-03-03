@@ -227,7 +227,7 @@ class TestDriftRegimeStrategy:
             elif sig["action"] == "sell" and bought:
                 break
         if bought:
-            assert s._hold_count >= 0
+            assert all(v >= 0 for v in s._hold_count.values())
 
 
 # ---------------------------------------------------------------------------

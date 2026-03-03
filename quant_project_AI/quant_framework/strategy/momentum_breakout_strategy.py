@@ -48,7 +48,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         self.atr_period = atr_period
         self.atr_trail = atr_trail
         self._min_lookback = max(high_period, atr_period) + 1
-        self._trailing_stop = 0.0
+        self._trailing_stop: Dict[str, float] = {}
 
     @property
     def kernel_name(self) -> str:
@@ -102,19 +102,19 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # 持仓：更新跟踪止损
         if holdings > 0:
             new_stop = current_price - self.atr_trail * atr
-            if new_stop > self._trailing_stop:
-                self._trailing_stop = new_stop
-            if current_price < self._trailing_stop:
-                self._trailing_stop = 0.0
+            if new_stop > self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = new_stop
+            if current_price < self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = 0.0
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         # 开仓
         if holdings == 0:
             threshold = roll_high * (1.0 - self.proximity_pct)
             if current_price >= threshold:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
-                    self._trailing_stop = current_price - self.atr_trail * atr
+                    self._trailing_stop[symbol] = current_price - self.atr_trail * atr
                     return {"action": "buy", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}
@@ -152,18 +152,18 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         if holdings > 0:
             new_stop = current_price - self.atr_trail * atr
-            if new_stop > self._trailing_stop:
-                self._trailing_stop = new_stop
-            if current_price < self._trailing_stop:
-                self._trailing_stop = 0.0
+            if new_stop > self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = new_stop
+            if current_price < self._trailing_stop.get(symbol, 0.0):
+                self._trailing_stop[symbol] = 0.0
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         if holdings == 0:
             threshold = roll_high * (1.0 - self.proximity_pct)
             if current_price >= threshold:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
-                    self._trailing_stop = current_price - self.atr_trail * atr
+                    self._trailing_stop[symbol] = current_price - self.atr_trail * atr
                     return {"action": "buy", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}

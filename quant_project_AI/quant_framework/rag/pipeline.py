@@ -5,9 +5,11 @@ RAG 端到端管道：实时接入（非阻塞 put + 后台 worker）→ 处理 
 import asyncio
 import hashlib
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .config import RAGConfig
@@ -25,6 +27,14 @@ logger = logging.getLogger(__name__)
 
 def _default_stop() -> bool:
     return False
+
+
+def _validate_store_path(path: str) -> str:
+    """Resolve *path* to absolute and reject directory-traversal attempts."""
+    resolved = str(Path(path).resolve())
+    if ".." in os.path.normpath(path).split(os.sep):
+        raise ValueError(f"Directory traversal not allowed in store path: {path}")
+    return resolved
 
 
 class RAGPipeline:
@@ -62,7 +72,7 @@ class RAGPipeline:
             ttl_seconds=ttl,
         )
         if self.config.vector_store_path:
-            self.vector_store.load(self.config.vector_store_path)
+            self.vector_store.load(_validate_store_path(self.config.vector_store_path))
         self.keyword_index = KeywordIndex()
         cache_size = getattr(self.config, "query_embedding_cache_size", 0) or 0
 
@@ -101,6 +111,7 @@ class RAGPipeline:
 
         self._ingest_queue = IngestQueue(max_size=self.config.ingest_queue_max_size)
         self._worker_stop = threading.Event()
+        self._worker_thread: Optional[threading.Thread] = None
         self._worker_started = False
         self._dedup_hashes: OrderedDict = OrderedDict()
         self._dedup_max = max(0, getattr(self.config, "dedup_cache_max", 0))
@@ -125,6 +136,7 @@ class RAGPipeline:
                     self.add_documents(batch)
 
         t = threading.Thread(target=_run, daemon=True)
+        self._worker_thread = t
         t.start()
 
     def add_documents(self, docs: List[Document]) -> int:
@@ -308,6 +320,12 @@ class RAGPipeline:
             d["last_retrieve_sec"] = round(self._last_retrieve_sec, 4)
         return d
 
+    def shutdown(self, timeout: float = 5.0) -> None:
+        """Gracefully stop the background ingestion worker."""
+        self._worker_stop.set()
+        if hasattr(self, '_worker_thread') and self._worker_thread is not None and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=timeout)
+
     def health_check(self) -> dict:
         """运行状态快照：队列长度、向量条数、关键词条数，便于监控与排障。"""
         return {
@@ -319,10 +337,10 @@ class RAGPipeline:
         }
 
     def save_store(self, directory: Optional[str] = None) -> None:
-        """持久化向量存储到磁盘。"""
+        """Persist the vector store to disk."""
         path = directory or self.config.vector_store_path
         if path and hasattr(self.vector_store, "save"):
-            self.vector_store.save(path)
+            self.vector_store.save(_validate_store_path(path))
 
     @property
     def ingest_queue(self) -> IngestQueue:

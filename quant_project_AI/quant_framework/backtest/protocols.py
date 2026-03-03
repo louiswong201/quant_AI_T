@@ -148,7 +148,7 @@ class IOrderManager(Protocol):
         """Cancel a pending order. Returns True if found and cancelled."""
         ...
 
-    def expire_stale(self, current_bar: int) -> List[Order]:
+    def expire_stale(self, current_bar: int, current_date: Any = None) -> List[Order]:
         """Expire orders past their time-in-force. Returns expired orders."""
         ...
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 import hashlib
@@ -12,8 +13,10 @@ import threading
 from typing import Iterator, Optional, Dict, Any, Callable, Tuple
 from collections import OrderedDict
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def _data_key(symbol: str, start_date: str, end_date: str) -> str:
@@ -113,11 +116,11 @@ class CacheManager:
         safe = _key_to_filename(key)
         return os.path.join(self._disk_dir, f"{safe}.parquet" if is_dataframe else f"{safe}.pkl")
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str, copy: bool = True) -> Optional[Any]:
         with self._lock:
             val = self._memory.get(key)
             if val is not None:
-                return val.copy() if isinstance(val, pd.DataFrame) else val
+                return val.copy() if (copy and isinstance(val, pd.DataFrame)) else val
 
             if not self._enable_disk:
                 return None
@@ -132,9 +135,9 @@ class CacheManager:
                         self._evict_until(size)
                         self._memory.put(key, val)
                         self._current_bytes += size
-                    return val.copy() if isinstance(val, pd.DataFrame) else val
+                    return val.copy() if (copy and isinstance(val, pd.DataFrame)) else val
                 except Exception:
-                    pass
+                    logger.debug("Cache operation failed", exc_info=True)
             if os.path.isfile(path_pkl):
                 try:
                     with open(path_pkl, "rb") as f:
@@ -144,9 +147,9 @@ class CacheManager:
                         self._evict_until(size)
                         self._memory.put(key, val)
                         self._current_bytes += size
-                    return val.copy() if isinstance(val, pd.DataFrame) else val
+                    return val.copy() if (copy and isinstance(val, pd.DataFrame)) else val
                 except Exception:
-                    pass
+                    logger.debug("Cache operation failed", exc_info=True)
             return None
 
     def _evict_until(self, need_bytes: int) -> None:
@@ -166,7 +169,7 @@ class CacheManager:
                         path = self._disk_path(key, True)
                         value.to_parquet(path, index=False)
                     except Exception:
-                        pass
+                        logger.debug("Cache operation failed", exc_info=True)
                 return
 
             self._evict_until(size)
@@ -181,7 +184,7 @@ class CacheManager:
                         with open(self._disk_path(key, False), "wb") as f:
                             pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
                 except Exception:
-                    pass
+                    logger.debug("Cache operation failed", exc_info=True)
 
     def remove(self, key: str) -> None:
         with self._lock:
@@ -194,7 +197,7 @@ class CacheManager:
                     try:
                         os.remove(path)
                     except Exception:
-                        pass
+                        logger.debug("Cache operation failed", exc_info=True)
 
     def remove_keys_with_prefix(self, prefix: str) -> int:
         """删除所有 key 以 prefix 开头的项（内存+磁盘）。返回删除条数。"""
@@ -211,7 +214,7 @@ class CacheManager:
                         try:
                             os.remove(path)
                         except Exception:
-                            pass
+                            logger.debug("Cache operation failed", exc_info=True)
             if self._enable_disk and os.path.isdir(self._disk_dir):
                 safe_prefix = _key_to_filename(prefix)
                 for name in os.listdir(self._disk_dir):
@@ -220,7 +223,7 @@ class CacheManager:
                             os.remove(os.path.join(self._disk_dir, name))
                             count += 1
                         except Exception:
-                            pass
+                            logger.debug("Cache operation failed", exc_info=True)
         return count
 
     def clear(self, clear_disk: bool = False) -> None:
@@ -233,7 +236,7 @@ class CacheManager:
                         try:
                             os.remove(os.path.join(self._disk_dir, name))
                         except Exception:
-                            pass
+                            logger.debug("Cache operation failed", exc_info=True)
 
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
@@ -271,7 +274,7 @@ class CacheManager:
                             self.put(k, out, to_disk=False)
                             return out
                         except Exception:
-                            pass
+                            logger.debug("Cache operation failed", exc_info=True)
                     if os.path.isfile(path_pkl):
                         try:
                             with open(path_pkl, "rb") as f:
@@ -279,7 +282,7 @@ class CacheManager:
                             self.put(k, out, to_disk=False)
                             return out
                         except Exception:
-                            pass
+                            logger.debug("Cache operation failed", exc_info=True)
                 out = func(*args, **kwargs)
                 self.put(k, out)
                 return out

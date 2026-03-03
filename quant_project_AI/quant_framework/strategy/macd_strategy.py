@@ -91,7 +91,7 @@ class MACDStrategy(BaseStrategy):
         
         # MACD上穿信号线，买入
         if prev_macd <= prev_signal and macd > signal:
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {
                     'action': 'buy',
@@ -134,7 +134,7 @@ class MACDStrategy(BaseStrategy):
         prev_signal = float(sig_arr[i - 1]) if i > 0 else signal
         current_price = float(close[i])
         if prev_macd <= prev_signal and macd > signal:
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {"action": "buy", "symbol": symbol, "shares": shares}
         elif prev_macd >= prev_signal and macd < signal:
@@ -158,7 +158,7 @@ class MACDStrategy(BaseStrategy):
             macd_arr = arrs.get("macd")
             sig_arr = arrs.get("macd_signal")
             if close is None or macd_arr is None or sig_arr is None:
-                return None
+                continue
             macd = float(macd_arr[i])
             signal = float(sig_arr[i])
             if pd.isna(macd) or pd.isna(signal):
@@ -167,7 +167,7 @@ class MACDStrategy(BaseStrategy):
             prev_signal = float(sig_arr[i - 1]) if i > 0 else signal
             current_price = float(close[i])
             if prev_macd <= prev_signal and macd > signal:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     signals.append({"action": "buy", "symbol": symbol, "shares": shares})
             elif prev_macd >= prev_signal and macd < signal:

@@ -78,7 +78,7 @@ class RSIStrategy(BaseStrategy):
         if rsi < self.oversold:
             holdings = self.positions.get(symbol, 0)
             if holdings == 0:  # 没有持仓时才买入
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {
                         'action': 'buy',
@@ -125,7 +125,7 @@ class RSIStrategy(BaseStrategy):
         if rsi < self.oversold:
             holdings = self.positions.get(symbol, 0)
             if holdings == 0:
-                shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
         elif rsi > self.overbought:
@@ -171,7 +171,7 @@ class RSIStrategy(BaseStrategy):
             if rsi < self.oversold:
                 holdings = self.positions.get(symbol, 0)
                 if holdings == 0:
-                    shares = self.calculate_position_size(current_price, risk_percent=0.95)
+                    shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                     if shares > 0 and self.can_buy(symbol, current_price, shares):
                         signals.append({"action": "buy", "symbol": symbol, "shares": shares})
             elif rsi > self.overbought:

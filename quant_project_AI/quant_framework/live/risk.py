@@ -203,14 +203,23 @@ class RiskManagedBroker(Broker):
         if self._cb is not None:
             cb_reason = self._cb.check()
             if cb_reason is not None:
+                self._cb._reject_count += 1
                 return {"status": "rejected", "message": cb_reason}
 
+        prices: Dict[str, float] = {}
+        sym = signal.get("symbol", "")
+        px = signal.get("price", 0.0)
+        if sym and px:
+            prices[sym] = px
         reason = self._risk_gate.validate(
             signal,
             cash=self._broker.get_cash(),
             positions=self._broker.get_positions(),
+            current_prices=prices,
         )
         if reason is not None:
+            if self._cb is not None:
+                self._cb._reject_count += 1
             return {"status": "rejected", "message": f"risk_reject: {reason}"}
 
         t0 = time.perf_counter()

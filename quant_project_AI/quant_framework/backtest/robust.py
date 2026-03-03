@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from .backtest_engine import BacktestEngine
-from .kernels import KERNEL_REGISTRY, config_to_kernel_costs, eval_kernel
+from .kernels import KERNEL_REGISTRY, config_to_kernel_costs, eval_kernel, eval_kernel_detailed
 from ..analysis.performance import PerformanceAnalyzer
 from ..strategy.base_strategy import BaseStrategy
 
@@ -120,17 +120,17 @@ def _run_robust_kernel(
                 kernel_params = strat.kernel_params  # type: ignore[attr-defined]
                 ic = strat.initial_capital
 
-                ret_pct, max_dd_pct, n_trades = eval_kernel(
+                ret_pct, max_dd_pct, n_trades, eq_curve, _fpos, _parr = eval_kernel_detailed(
                     kernel_name, kernel_params, c, o, h, l,
                     sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
                 )
 
-                final_value = ic * (1.0 + ret_pct / 100.0)
-                ret_rate = ret_pct / 100.0
+                final_value = float(eq_curve[-1]) if len(eq_curve) > 0 else ic
+                ret_rate = (final_value / ic - 1.0) if ic > 0 else 0.0
 
-                pv = np.linspace(ic, final_value, n)
-                dr = np.zeros(n, dtype=np.float64)
-                if n > 1:
+                pv = eq_curve * ic if eq_curve[0] == 1.0 else eq_curve
+                dr = np.zeros(len(pv), dtype=np.float64)
+                if len(pv) > 1:
                     dr[1:] = np.diff(pv) / np.where(pv[:-1] > 0, pv[:-1], 1.0)
 
                 analyzer = PerformanceAnalyzer(risk_free_rate=risk_free_rate)

@@ -76,13 +76,13 @@ class TransactionCostAnalyzer:
         report.total_commission = float(trades_df["commission"].sum()) if "commission" in trades_df.columns else 0.0
 
         per_trade: List[Dict[str, Any]] = []
-        for _, row in trades_df.iterrows():
-            notional = float(row.get("price", 0)) * float(row.get("shares", 0))
-            commission = float(row.get("commission", 0))
+        for row in trades_df.itertuples():
+            notional = float(getattr(row, "price", 0)) * float(getattr(row, "shares", 0))
+            commission = float(getattr(row, "commission", 0))
 
             slippage_bps = 0.0
             if config is not None:
-                if row.get("action") == "buy":
+                if getattr(row, "action", None) == "buy":
                     slippage_bps = getattr(config, "slippage_bps_buy", 0.0)
                 else:
                     slippage_bps = getattr(config, "slippage_bps_sell", 0.0)
@@ -91,9 +91,9 @@ class TransactionCostAnalyzer:
             total = commission + slippage_cost
 
             per_trade.append({
-                "date": row.get("date"),
-                "action": row.get("action"),
-                "symbol": row.get("symbol"),
+                "date": getattr(row, "date", None),
+                "action": getattr(row, "action", None),
+                "symbol": getattr(row, "symbol", None),
                 "notional": notional,
                 "commission": commission,
                 "slippage_bps": slippage_bps,

@@ -62,7 +62,7 @@ class MovingAverageStrategy(BaseStrategy):
         prev_long_ma = float(long[i - 1]) if i > 0 else long_ma
         current_price = float(close[i])
         if prev_short_ma <= prev_long_ma and short_ma > long_ma:
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {"action": "buy", "symbol": symbol, "shares": shares}
         elif prev_short_ma >= prev_long_ma and short_ma < long_ma:
@@ -108,7 +108,7 @@ class MovingAverageStrategy(BaseStrategy):
         # 金叉：短期均线上穿长期均线，买入
         if prev_short_ma <= prev_long_ma and short_ma > long_ma:
             # 计算买入数量（使用全部可用资金）
-            shares = self.calculate_position_size(current_price, risk_percent=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 return {
                     'action': 'buy',
