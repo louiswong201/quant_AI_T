@@ -133,12 +133,14 @@ class TradingRunner:
             window_df = self._feed.get_window(symbol, bar.interval)
             if window_df.empty:
                 return
-            sig = adapter.on_bar(window_df, symbol, bar.interval)
+            arrs = self._feed.get_arrays(symbol, bar.interval)
+            sig = adapter.on_bar(window_df, symbol, bar.interval, arrays=arrs)
         else:
             window_df = self._feed.get_window(symbol)
             if window_df.empty:
                 return
-            sig = adapter.generate_signal(window_df, symbol)
+            arrs = self._feed.get_arrays(symbol)
+            sig = adapter.generate_signal(window_df, symbol, arrays=arrs)
 
         if sig is None:
             now = time.time()
@@ -316,6 +318,8 @@ class TradingRunner:
                 reason, action.upper(), symbol, fill_price, filled, pnl, entry_price,
             )
             self._take_equity_snapshot()
+        else:
+            self._sl_triggered.pop(symbol, None)
 
     def _record_pnl_to_broker(self, pnl: float) -> None:
         """Forward realized PnL to RiskManagedBroker's circuit breaker if available."""
@@ -559,11 +563,11 @@ class TradingRunner:
         cash = self._broker.get_cash()
         equity = cash + sum(positions.get(s, 0) * prices.get(s, 0) for s in positions)
 
-        initial_cash = getattr(self._broker, "_initial_cash", None)
+        initial_cash = getattr(self._broker, "_initial_cash_stored", None)
         if initial_cash is None:
-            inner = getattr(self._broker, "_inner", None)
+            inner = getattr(self._broker, "_broker", None)
             if inner is not None:
-                initial_cash = getattr(inner, "_initial_cash", None)
+                initial_cash = getattr(inner, "_initial_cash_stored", None)
         initial_cash = initial_cash or 100_000.0
 
         total_return_pct = ((equity - initial_cash) / initial_cash) * 100 if initial_cash else 0.0

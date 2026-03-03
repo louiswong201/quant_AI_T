@@ -73,35 +73,81 @@ def _is_crypto(symbol: str) -> bool:
 
 
 class _RollingWindow:
-    """Fixed-size rolling OHLCV window stored as a DataFrame."""
+    """Fixed-size rolling OHLCV window backed by pre-allocated numpy arrays.
+
+    Uses a circular write pointer and avoids any memory allocation in the
+    hot path (append).  ``to_arrays`` returns contiguous float64 views
+    suitable for direct kernel evaluation without ``np.ascontiguousarray``.
+    ``to_dataframe`` is only used for dashboard display, never in the
+    signal generation hot path.
+    """
+
+    _COLS = ("open", "high", "low", "close", "volume")
 
     def __init__(self, maxlen: int = 200):
         self._maxlen = maxlen
-        self._rows: List[Dict[str, Any]] = []
+        self._buf = {c: np.empty(maxlen, dtype=np.float64) for c in self._COLS}
+        self._dates: List[Any] = [None] * maxlen
+        self._count = 0
+        self._write = 0
+        self._df_dirty = True
+        self._df_cache: Optional[pd.DataFrame] = None
+        self._arr_dirty = True
+        self._arr_cache: Optional[Dict[str, np.ndarray]] = None
 
     def append(self, bar: BarEvent) -> None:
-        self._rows.append({
-            "date": bar.timestamp,
-            "open": bar.open,
-            "high": bar.high,
-            "low": bar.low,
-            "close": bar.close,
-            "volume": bar.volume,
-        })
-        if len(self._rows) > self._maxlen:
-            self._rows = self._rows[-self._maxlen:]
+        w = self._write
+        self._buf["open"][w] = bar.open
+        self._buf["high"][w] = bar.high
+        self._buf["low"][w] = bar.low
+        self._buf["close"][w] = bar.close
+        self._buf["volume"][w] = bar.volume
+        self._dates[w] = bar.timestamp
+        self._write = (w + 1) % self._maxlen
+        if self._count < self._maxlen:
+            self._count += 1
+        self._df_dirty = True
+        self._arr_dirty = True
+
+    def _ordered_slice(self, arr: np.ndarray) -> np.ndarray:
+        """Return a contiguous copy of the ring buffer in chronological order."""
+        n = self._count
+        if n == 0:
+            return np.empty(0, dtype=np.float64)
+        if n < self._maxlen:
+            return arr[:n].copy()
+        start = self._write
+        return np.concatenate((arr[start:], arr[:start]))
 
     def to_dataframe(self) -> pd.DataFrame:
-        if not self._rows:
-            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-        return pd.DataFrame(self._rows)
+        if not self._df_dirty and self._df_cache is not None:
+            return self._df_cache
+        if self._count == 0:
+            self._df_cache = pd.DataFrame(columns=["date"] + list(self._COLS))
+            self._df_dirty = False
+            return self._df_cache
+        data: Dict[str, Any] = {}
+        for c in self._COLS:
+            data[c] = self._ordered_slice(self._buf[c])
+        n = self._count
+        if n < self._maxlen:
+            data["date"] = self._dates[:n]
+        else:
+            s = self._write
+            data["date"] = self._dates[s:] + self._dates[:s]
+        self._df_cache = pd.DataFrame(data)
+        self._df_dirty = False
+        return self._df_cache
 
     def to_arrays(self) -> Dict[str, np.ndarray]:
-        df = self.to_dataframe()
-        return {c: df[c].values.astype(np.float64) for c in ("open", "high", "low", "close", "volume")}
+        if not self._arr_dirty and self._arr_cache is not None:
+            return self._arr_cache
+        self._arr_cache = {c: self._ordered_slice(self._buf[c]) for c in self._COLS}
+        self._arr_dirty = False
+        return self._arr_cache
 
     def __len__(self) -> int:
-        return len(self._rows)
+        return self._count
 
 
 class YFinanceFeed:

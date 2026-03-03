@@ -89,23 +89,36 @@ class KernelAdapter:
         self,
         window_df: pd.DataFrame,
         symbol: str,
+        *,
+        arrays: Optional[Dict[str, np.ndarray]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Run the Numba kernel on the full window and emit a signal on
         position change.
 
+        ``arrays`` is an optional pre-built dict of contiguous float64 arrays
+        (keys: open, high, low, close) from ``_RollingWindow.to_arrays()``.
+        When provided, no ``np.ascontiguousarray`` copies are made — the
+        arrays are used directly.
+
         Returns a signal dict with action='buy'|'sell' or None.
         """
-        if len(window_df) < 30:
-            return None
-
-        for col in ("open", "high", "low", "close"):
-            if col not in window_df.columns:
+        if arrays is not None:
+            c = arrays.get("close")
+            if c is None or len(c) < 30:
                 return None
-
-        c = np.ascontiguousarray(window_df["close"].values, dtype=np.float64)
-        o = np.ascontiguousarray(window_df["open"].values, dtype=np.float64)
-        h = np.ascontiguousarray(window_df["high"].values, dtype=np.float64)
-        l = np.ascontiguousarray(window_df["low"].values, dtype=np.float64)
+            o = arrays["open"]
+            h = arrays["high"]
+            l = arrays["low"]
+        else:
+            if len(window_df) < 30:
+                return None
+            for col in ("open", "high", "low", "close"):
+                if col not in window_df.columns:
+                    return None
+            vals = window_df[["close", "open", "high", "low"]].values
+            if vals.dtype != np.float64 or not vals.flags.c_contiguous:
+                vals = np.ascontiguousarray(vals, dtype=np.float64)
+            c, o, h, l = vals[:, 0], vals[:, 1], vals[:, 2], vals[:, 3]
 
         try:
             co = self._costs
@@ -211,16 +224,23 @@ class MultiTFAdapter:
         self,
         windows: Dict[str, pd.DataFrame],
         symbol: str,
+        *,
+        arrays_map: Optional[Dict[str, Dict[str, np.ndarray]]] = None,
     ) -> None:
         """Run each kernel adapter on its historical window to establish
         initial positions *without* emitting any signals.  Must be called
-        after historical data has been loaded into the feed windows."""
+        after historical data has been loaded into the feed windows.
+
+        ``arrays_map`` is an optional per-interval dict of pre-built arrays
+        from ``_RollingWindow.to_arrays()`` to skip DataFrame→array conversion.
+        """
         for iv in self._sorted_intervals:
             adapter = self._adapters.get(iv)
             df = windows.get(iv)
             if adapter is None or df is None or df.empty:
                 continue
-            adapter.generate_signal(df, symbol)
+            arrs = arrays_map.get(iv) if arrays_map else None
+            adapter.generate_signal(df, symbol, arrays=arrs)
             self._tf_positions[iv] = adapter.get_position()
 
         pos_str = " | ".join(
@@ -249,14 +269,20 @@ class MultiTFAdapter:
         window_df: pd.DataFrame,
         symbol: str,
         interval: str,
+        *,
+        arrays: Optional[Dict[str, np.ndarray]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Process a bar close for the given interval. Returns a trade signal
-        only when the fused position changes."""
+        only when the fused position changes.
+
+        ``arrays`` — pre-built contiguous float64 arrays to bypass
+        DataFrame → array conversion.
+        """
         adapter = self._adapters.get(interval)
         if adapter is None:
             return None
 
-        sig = adapter.generate_signal(window_df, symbol)
+        sig = adapter.generate_signal(window_df, symbol, arrays=arrays)
         self._tf_positions[interval] = adapter.get_position()
 
         pos_str = " | ".join(

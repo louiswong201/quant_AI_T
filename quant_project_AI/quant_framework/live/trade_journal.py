@@ -54,7 +54,19 @@ CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(timestamp);
 
 
 class TradeJournal:
-    """Persistent trade and equity history backed by SQLite."""
+    """Persistent trade and equity history backed by SQLite.
+
+    Write operations are batched: rows are queued in memory and flushed to
+    SQLite every ``flush_interval`` seconds or every ``flush_size`` rows,
+    whichever comes first.  This avoids blocking the async event loop with
+    per-row commits (the previous bottleneck).  ``record_trade`` still
+    returns immediately; the actual SQLite INSERT is deferred.
+
+    Reads always call ``_maybe_flush()`` first so they see the latest data.
+    """
+
+    _FLUSH_INTERVAL = 2.0
+    _FLUSH_SIZE = 50
 
     def __init__(self, db_path: str = "paper_trading.db"):
         p = Path(db_path)
@@ -62,9 +74,51 @@ class TradeJournal:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(p), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._trade_buf: List[tuple] = []
+        self._equity_buf: List[tuple] = []
+        self._signal_buf: List[tuple] = []
+        self._last_flush = time.monotonic()
+
+    def _maybe_flush(self) -> None:
+        """Flush pending writes if the buffer or timer threshold is reached."""
+        total = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
+        elapsed = time.monotonic() - self._last_flush
+        if total == 0:
+            return
+        if total < self._FLUSH_SIZE and elapsed < self._FLUSH_INTERVAL:
+            return
+        self._flush()
+
+    def _flush(self) -> None:
+        """Flush all pending writes to SQLite in a single transaction."""
+        with self._lock:
+            if self._trade_buf:
+                self._conn.executemany(
+                    "INSERT INTO trades (timestamp, symbol, side, shares, price, "
+                    "commission, pnl, strategy, metadata) VALUES (?,?,?,?,?,?,?,?,?)",
+                    self._trade_buf,
+                )
+                self._trade_buf.clear()
+            if self._equity_buf:
+                self._conn.executemany(
+                    "INSERT INTO equity_snapshots (timestamp, equity, cash, positions) "
+                    "VALUES (?,?,?,?)",
+                    self._equity_buf,
+                )
+                self._equity_buf.clear()
+            if self._signal_buf:
+                self._conn.executemany(
+                    "INSERT INTO signals (timestamp, symbol, strategy, signal_type, params) "
+                    "VALUES (?,?,?,?,?)",
+                    self._signal_buf,
+                )
+                self._signal_buf.clear()
+            self._conn.commit()
+        self._last_flush = time.monotonic()
 
     def record_trade(
         self,
@@ -79,15 +133,12 @@ class TradeJournal:
         timestamp: Optional[datetime] = None,
     ) -> int:
         ts = (timestamp or datetime.now(timezone.utc)).isoformat()
-        with self._lock:
-            cur = self._conn.execute(
-                "INSERT INTO trades (timestamp, symbol, side, shares, price, commission, pnl, strategy, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts, symbol, side, shares, price, commission, pnl, strategy,
-                 json.dumps(metadata or {})),
-            )
-            self._conn.commit()
-            return cur.lastrowid or 0
+        self._trade_buf.append(
+            (ts, symbol, side, shares, price, commission, pnl, strategy,
+             json.dumps(metadata or {}))
+        )
+        self._maybe_flush()
+        return 0
 
     def record_equity(
         self,
@@ -97,12 +148,10 @@ class TradeJournal:
         timestamp: Optional[datetime] = None,
     ) -> None:
         ts = (timestamp or datetime.now(timezone.utc)).isoformat()
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO equity_snapshots (timestamp, equity, cash, positions) VALUES (?, ?, ?, ?)",
-                (ts, equity, cash, json.dumps(positions or {})),
-            )
-            self._conn.commit()
+        self._equity_buf.append(
+            (ts, equity, cash, json.dumps(positions or {}))
+        )
+        self._maybe_flush()
 
     def record_signal(
         self,
@@ -113,14 +162,13 @@ class TradeJournal:
         timestamp: Optional[datetime] = None,
     ) -> None:
         ts = (timestamp or datetime.now(timezone.utc)).isoformat()
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO signals (timestamp, symbol, strategy, signal_type, params) VALUES (?, ?, ?, ?, ?)",
-                (ts, symbol, strategy, signal_type, json.dumps(params or {})),
-            )
-            self._conn.commit()
+        self._signal_buf.append(
+            (ts, symbol, strategy, signal_type, json.dumps(params or {}))
+        )
+        self._maybe_flush()
 
     def get_trades(self, limit: int = 100, symbol: Optional[str] = None) -> pd.DataFrame:
+        self._flush()
         q = "SELECT timestamp, symbol, side, shares, price, commission, pnl, strategy FROM trades"
         params: list = []
         if symbol:
@@ -132,6 +180,7 @@ class TradeJournal:
             return pd.read_sql_query(q, self._conn, params=params)
 
     def get_equity_curve(self, limit: int = 1000) -> pd.DataFrame:
+        self._flush()
         q = "SELECT timestamp, equity, cash, positions FROM equity_snapshots ORDER BY id DESC LIMIT ?"
         with self._lock:
             df = pd.read_sql_query(q, self._conn, params=[limit])
@@ -141,22 +190,28 @@ class TradeJournal:
         return df
 
     def get_daily_pnl(self, days: int = 30) -> pd.DataFrame:
+        self._flush()
         q = ("SELECT DATE(timestamp) as date, SUM(pnl) as daily_pnl, COUNT(*) as n_trades "
              "FROM trades GROUP BY DATE(timestamp) ORDER BY date DESC LIMIT ?")
         with self._lock:
             return pd.read_sql_query(q, self._conn, params=[days])
 
     def get_signals(self, limit: int = 100) -> pd.DataFrame:
+        self._flush()
         q = "SELECT timestamp, symbol, strategy, signal_type, params FROM signals ORDER BY id DESC LIMIT ?"
         with self._lock:
             return pd.read_sql_query(q, self._conn, params=[limit])
 
     def get_trade_stats(self) -> Dict[str, Any]:
         """Compute detailed trade statistics for dashboard display."""
+        self._flush()
         with self._lock:
             rows = self._conn.execute(
                 "SELECT pnl FROM trades WHERE pnl != 0"
             ).fetchall()
+            comm_row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(commission), 0) FROM trades"
+            ).fetchone()
         if not rows:
             return {
                 "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
@@ -169,7 +224,7 @@ class TradeJournal:
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
 
-        streak, max_w_streak, max_l_streak, cur_w, cur_l = 0, 0, 0, 0, 0
+        max_w_streak, max_l_streak, cur_w, cur_l = 0, 0, 0, 0
         for p in pnls:
             if p > 0:
                 cur_w += 1
@@ -182,11 +237,6 @@ class TradeJournal:
 
         total_win = sum(wins) if wins else 0.0
         total_loss = abs(sum(losses)) if losses else 0.0
-
-        with self._lock:
-            comm_row = self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(commission), 0) FROM trades"
-            ).fetchone()
         total_trades, total_pnl, total_commission = comm_row or (0, 0.0, 0.0)
 
         return {
@@ -208,6 +258,7 @@ class TradeJournal:
 
     def get_strategy_trade_stats(self, limit: int = 2000) -> List[Dict[str, Any]]:
         """Aggregate strategy-level performance from recent realized trades."""
+        self._flush()
         q = (
             "SELECT timestamp, symbol, strategy, pnl "
             "FROM trades WHERE pnl != 0 AND strategy != '' "
@@ -255,6 +306,7 @@ class TradeJournal:
         return rows
 
     def get_summary(self) -> Dict[str, Any]:
+        self._flush()
         with self._lock:
             row = self._conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(commission), 0) FROM trades"
@@ -273,5 +325,6 @@ class TradeJournal:
         }
 
     def close(self) -> None:
+        self._flush()
         with self._lock:
             self._conn.close()
