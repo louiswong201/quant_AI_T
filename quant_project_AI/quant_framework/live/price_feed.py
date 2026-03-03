@@ -210,12 +210,11 @@ class YFinanceFeed:
     @staticmethod
     def _is_us_market_hours() -> bool:
         """Check if current time falls within US market hours (9:30-16:00 ET)."""
-        from datetime import timezone as tz
         try:
             from zoneinfo import ZoneInfo
-        except ImportError:
+            now_et = datetime.now(ZoneInfo("US/Eastern"))
+        except Exception:
             return True
-        now_et = datetime.now(ZoneInfo("US/Eastern"))
         if now_et.weekday() >= 5:
             return False
         t = now_et.time()
