@@ -45,7 +45,7 @@ STRATEGIES = [
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Paper Trading with Live Dashboard")
-    p.add_argument("--symbols", type=str, default="BTCUSDT",
+    p.add_argument("--symbols", "--symbol", type=str, default="BTCUSDT",
                    help="Comma-separated symbol list (e.g. BTCUSDT,ETHUSDT,AAPL)")
     p.add_argument("--strategy", type=str, default="MA", choices=STRATEGIES,
                    help="Strategy name (single-TF mode)")
@@ -77,6 +77,10 @@ def parse_args() -> argparse.Namespace:
                    help="Run without dashboard")
     p.add_argument("--db-path", type=str, default="paper_trading.db",
                    help="SQLite database path for trade journal")
+    p.add_argument("--max-daily-loss", type=float, default=0.05,
+                   help="Circuit breaker: max daily loss as fraction (0.03 = 3%%)")
+    p.add_argument("--risk-config", type=str, default="",
+                   help="Risk overrides as key=value pairs (e.g. max_daily_loss_pct=0.03)")
     return p.parse_args()
 
 
@@ -222,9 +226,18 @@ def main() -> None:
             )
 
     paper = PaperBroker.from_backtest_config(bt_config, initial_cash=args.initial_cash)
+    max_daily_loss = args.max_daily_loss
+    if args.risk_config:
+        for kv in args.risk_config.split(","):
+            kv = kv.strip()
+            if "=" not in kv:
+                continue
+            k, v = kv.split("=", 1)
+            if k.strip() == "max_daily_loss_pct":
+                max_daily_loss = float(v.strip())
     risk_cfg = RiskConfig(
         allow_short=True,
-        max_daily_loss_pct=0.05,
+        max_daily_loss_pct=max_daily_loss,
         max_consecutive_errors=5,
     )
     cb = CircuitBreaker(risk_cfg, initial_capital=args.initial_cash)
