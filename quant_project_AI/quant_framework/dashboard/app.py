@@ -36,17 +36,17 @@ from .charts import (
     build_trade_log_table,
 )
 
-_BG = "#0b0e14"
-_CARD = "#121722"
-_SURFACE = "#1a2030"
-_BORDER = "#283247"
-_TEXT = "#e6e8eb"
-_MUTED = "#8b95a5"
-_GREEN = "#00d4aa"
-_RED = "#ff4757"
+_BG = "#08090e"
+_CARD = "#0f1117"
+_SURFACE = "#161b26"
+_BORDER = "#1e2433"
+_TEXT = "#f8fafc"
+_MUTED = "#94a3b8"
+_GREEN = "#10b981"
+_RED = "#ef4444"
 _BLUE = "#3b82f6"
 _AMBER = "#f59e0b"
-_PURPLE = "#a855f7"
+_PURPLE = "#8b5cf6"
 _CYAN = "#06b6d4"
 
 _FONT = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
@@ -61,74 +61,181 @@ body {{
     color: {_TEXT};
     margin: 0;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }}
+
+/* Shell Card */
 .shell-card {{
     background: {_CARD};
     border: 1px solid {_BORDER};
     border-radius: 12px;
-    padding: 10px 12px;
+    padding: 12px 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }}
+
+/* Metric Cards */
 .metric-card {{
-    background: {_CARD};
+    background: linear-gradient(135deg, {_CARD} 0%, {_SURFACE} 100%);
     border: 1px solid {_BORDER};
-    border-radius: 10px;
-    padding: 12px 14px;
-    min-width: 120px;
+    border-radius: 12px;
+    padding: 14px 16px;
+    min-width: 130px;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}}
+.metric-card:hover {{
+    border-color: {_BLUE};
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
+    transform: translateY(-2px);
 }}
 .metric-label {{
-    font-size: 0.68rem;
+    font-size: 0.7rem;
     font-weight: 600;
     color: {_MUTED};
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
+    letter-spacing: 0.6px;
+    margin-bottom: 6px;
 }}
 .metric-value {{
-    font-size: 1.18rem;
+    font-size: 1.3rem;
     font-weight: 700;
     margin: 0;
     font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }}
+
+/* Chart Cards */
 .chart-card {{
     background: {_CARD};
     border: 1px solid {_BORDER};
     border-radius: 12px;
-    padding: 10px;
+    padding: 14px;
     overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}}
+
+/* Dropdown Styles - CRITICAL FIX */
+.dash-dropdown {{
+    font-family: {_FONT} !important;
 }}
 .dash-dropdown .Select-control {{
     background-color: {_SURFACE} !important;
-    border-color: {_BORDER} !important;
-    color: {_TEXT} !important;
+    border: 1px solid {_BORDER} !important;
     border-radius: 8px !important;
+    min-height: 38px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
 }}
-.dash-dropdown .Select-menu-outer {{
-    background-color: {_SURFACE} !important;
-    border-color: {_BORDER} !important;
-}}
-.dash-dropdown .Select-option {{
-    background-color: {_SURFACE} !important;
-    color: {_TEXT} !important;
-}}
-.dash-dropdown .Select-option.is-focused {{
-    background-color: {_CARD} !important;
+.dash-dropdown .Select-control:hover {{
+    border-color: {_BLUE} !important;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3) !important;
 }}
 .dash-dropdown .Select-value-label {{
     color: {_TEXT} !important;
+    font-weight: 500 !important;
+    font-size: 0.85rem !important;
+    line-height: 1.5 !important;
 }}
 .dash-dropdown .Select-placeholder {{
     color: {_MUTED} !important;
+    font-size: 0.85rem !important;
+    line-height: 1.5 !important;
 }}
+.dash-dropdown .Select-input {{
+    color: {_TEXT} !important;
+    height: auto !important;
+}}
+.dash-dropdown .Select-input > input {{
+    color: {_TEXT} !important;
+    background: transparent !important;
+    padding: 8px 0 !important;
+}}
+.dash-dropdown .Select-arrow-zone {{
+    padding-right: 10px !important;
+}}
+.dash-dropdown .Select-arrow {{
+    border-color: {_MUTED} transparent transparent !important;
+    border-width: 6px 6px 3px !important;
+}}
+.dash-dropdown.is-open .Select-arrow {{
+    border-color: transparent transparent {_MUTED} !important;
+    border-width: 3px 6px 6px !important;
+}}
+.dash-dropdown .Select-menu-outer {{
+    background-color: {_CARD} !important;
+    border: 1px solid {_BLUE} !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+    margin-top: 4px !important;
+    z-index: 9999 !important;
+}}
+.dash-dropdown .Select-menu {{
+    max-height: 320px !important;
+    overflow-y: auto !important;
+}}
+.dash-dropdown .Select-option {{
+    background-color: transparent !important;
+    color: {_TEXT} !important;
+    padding: 12px 14px !important;
+    font-size: 0.85rem !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+}}
+.dash-dropdown .Select-option:hover,
+.dash-dropdown .Select-option.is-focused {{
+    background-color: {_SURFACE} !important;
+    color: {_TEXT} !important;
+}}
+.dash-dropdown .Select-option.is-selected {{
+    background-color: {_BLUE}30 !important;
+    color: {_TEXT} !important;
+    font-weight: 600 !important;
+}}
+.dash-dropdown .Select-option.is-selected:hover {{
+    background-color: {_BLUE}40 !important;
+}}
+/* Fix for multi-value (if used) */
+.dash-dropdown .Select-value {{
+    background-color: {_BLUE}20 !important;
+    border: 1px solid {_BLUE}40 !important;
+    color: {_TEXT} !important;
+}}
+.dash-dropdown .Select-value-icon {{
+    border-right-color: {_BLUE}40 !important;
+}}
+.dash-dropdown .Select-value-icon:hover {{
+    background-color: {_RED}20 !important;
+    color: {_RED} !important;
+}}
+
+/* Status Indicator */
 .status-dot {{
     display: inline-block;
-    width: 8px; height: 8px;
+    width: 9px; 
+    height: 9px;
     border-radius: 50%;
-    margin-right: 6px;
+    margin-right: 8px;
     animation: pulse 2s infinite;
+    box-shadow: 0 0 8px currentColor;
 }}
 @keyframes pulse {{
-    0%, 100% {{ opacity: 1; }}
-    50% {{ opacity: 0.4; }}
+    0%, 100% {{ opacity: 1; transform: scale(1); }}
+    50% {{ opacity: 0.6; transform: scale(0.95); }}
+}}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {{
+    width: 8px;
+    height: 8px;
+}}
+::-webkit-scrollbar-track {{
+    background: {_CARD};
+}}
+::-webkit-scrollbar-thumb {{
+    background: {_BORDER};
+    border-radius: 4px;
+}}
+::-webkit-scrollbar-thumb:hover {{
+    background: {_MUTED};
 }}
 """
 
@@ -206,26 +313,27 @@ def create_app(
                     "display": "flex",
                     "alignItems": "center",
                     "justifyContent": "space-between",
-                    "marginBottom": "14px",
-                    "paddingBottom": "12px",
+                    "marginBottom": "16px",
+                    "paddingBottom": "14px",
                     "borderBottom": f"1px solid {_BORDER}",
                 },
                 children=[
                     html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+                        style={"display": "flex", "alignItems": "center", "gap": "14px"},
                         children=[
                             html.Div(
                                 style={
-                                    "width": "34px",
-                                    "height": "34px",
-                                    "borderRadius": "9px",
+                                    "width": "40px",
+                                    "height": "40px",
+                                    "borderRadius": "10px",
                                     "background": f"linear-gradient(135deg, {_BLUE}, {_CYAN})",
                                     "display": "flex",
                                     "alignItems": "center",
                                     "justifyContent": "center",
-                                    "fontSize": "17px",
+                                    "fontSize": "19px",
                                     "fontWeight": "700",
                                     "color": "#fff",
+                                    "boxShadow": f"0 4px 12px {_BLUE}40",
                                 },
                                 children="Q",
                             ),
@@ -235,23 +343,43 @@ def create_app(
                                         "TRADING TERMINAL PRO",
                                         style={
                                             "margin": "0",
-                                            "fontSize": "1.0rem",
+                                            "fontSize": "1.1rem",
                                             "fontWeight": "700",
                                             "color": _TEXT,
                                             "letterSpacing": "0.8px",
+                                            "textShadow": "0 1px 2px rgba(0,0,0,0.3)",
                                         },
                                     ),
-                                    html.Span(id="header-subtitle", style={"fontSize": "0.72rem", "color": _MUTED}),
+                                    html.Span(
+                                        id="header-subtitle", 
+                                        style={
+                                            "fontSize": "0.75rem", 
+                                            "color": _MUTED,
+                                            "fontWeight": "500",
+                                        }
+                                    ),
                                 ]
                             ),
                         ],
                     ),
                     html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "14px"},
+                        style={"display": "flex", "alignItems": "center", "gap": "16px"},
                         children=[
-                            html.Div(id="status-indicator", style={"display": "flex", "alignItems": "center", "fontSize": "0.8rem"}),
                             html.Div(
-                                style={"width": "180px"},
+                                id="status-indicator", 
+                                style={
+                                    "display": "flex", 
+                                    "alignItems": "center", 
+                                    "fontSize": "0.82rem",
+                                    "fontWeight": "600",
+                                    "padding": "6px 12px",
+                                    "background": f"{_SURFACE}",
+                                    "border": f"1px solid {_BORDER}",
+                                    "borderRadius": "8px",
+                                }
+                            ),
+                            html.Div(
+                                style={"width": "200px"},
                                 children=[
                                     dcc.Dropdown(
                                         id="symbol-select",
@@ -259,7 +387,7 @@ def create_app(
                                         value=default_symbol,
                                         clearable=False,
                                         className="dash-dropdown",
-                                        style={"fontSize": "0.82rem"},
+                                        style={"fontSize": "0.85rem"},
                                     )
                                 ],
                             ),
@@ -284,34 +412,57 @@ def create_app(
             ),
             html.Div(
                 className="shell-card",
-                style={"marginBottom": "12px", "display": "grid", "gridTemplateColumns": "180px 260px 220px 140px", "gap": "10px"},
+                style={
+                    "marginBottom": "14px", 
+                    "display": "grid", 
+                    "gridTemplateColumns": "200px 280px 240px 1fr", 
+                    "gap": "12px",
+                    "alignItems": "center",
+                },
                 children=[
                     dcc.Dropdown(
                         id="rank-basis",
                         options=[
-                            {"label": "Rank: Score", "value": "score"},
-                            {"label": "Rank: Sharpe", "value": "sharpe"},
-                            {"label": "Rank: Return", "value": "return"},
-                            {"label": "Rank: Calmar", "value": "calmar"},
-                            {"label": "Rank: Stability", "value": "stability"},
+                            {"label": "🏆 Rank: Score", "value": "score"},
+                            {"label": "📊 Rank: Sharpe", "value": "sharpe"},
+                            {"label": "💰 Rank: Return", "value": "return"},
+                            {"label": "📈 Rank: Calmar", "value": "calmar"},
+                            {"label": "⚖️ Rank: Stability", "value": "stability"},
                         ],
                         value="score",
                         clearable=False,
                         className="dash-dropdown",
                     ),
-                    dcc.Dropdown(id="scorecard-strategy", options=[], value="", clearable=False, className="dash-dropdown"),
+                    dcc.Dropdown(
+                        id="scorecard-strategy", 
+                        options=[], 
+                        value="", 
+                        clearable=False, 
+                        className="dash-dropdown",
+                        placeholder="Select Strategy..."
+                    ),
                     dcc.Dropdown(
                         id="compare-metric",
                         options=[
-                            {"label": "Compare: Risk/Return", "value": "risk_return"},
-                            {"label": "Compare: Quality", "value": "quality"},
-                            {"label": "Compare: Composite", "value": "composite"},
+                            {"label": "📉 Compare: Risk/Return", "value": "risk_return"},
+                            {"label": "✨ Compare: Quality", "value": "quality"},
+                            {"label": "🎯 Compare: Composite", "value": "composite"},
                         ],
                         value="risk_return",
                         clearable=False,
                         className="dash-dropdown",
                     ),
-                    html.Div(id="footer-ticks", style={"display": "flex", "alignItems": "center", "justifyContent": "flex-end", "color": _MUTED, "fontSize": "0.74rem"}),
+                    html.Div(
+                        id="footer-ticks", 
+                        style={
+                            "display": "flex", 
+                            "alignItems": "center", 
+                            "justifyContent": "flex-end", 
+                            "color": _MUTED, 
+                            "fontSize": "0.75rem",
+                            "fontWeight": "500",
+                        }
+                    ),
                 ],
             ),
             html.Div(

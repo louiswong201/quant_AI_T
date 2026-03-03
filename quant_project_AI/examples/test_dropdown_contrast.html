@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dropdown Contrast Test</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg: #08090e;
+    --card: #0f1117;
+    --surface: #161b26;
+    --border: #1e2433;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --blue: #3b82f6;
+}
+
+body {
+    background: var(--bg);
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--text);
+    padding: 40px;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+h1 {
+    color: var(--text);
+    margin-bottom: 30px;
+    font-size: 1.5rem;
+}
+
+.test-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.test-label {
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
+/* Native Select Dropdown */
+.native-select {
+    width: 100%;
+    padding: 12px 16px;
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 40px;
+}
+
+.native-select:hover {
+    border-color: var(--blue);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.native-select:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+.native-select option {
+    background-color: var(--surface);
+    color: var(--text);
+    padding: 12px;
+}
+
+/* Custom Dropdown Simulation */
+.custom-dropdown {
+    position: relative;
+    width: 100%;
+}
+
+.dropdown-button {
+    width: 100%;
+    padding: 12px 16px;
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.2s ease;
+}
+
+.dropdown-button:hover {
+    border-color: var(--blue);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.dropdown-arrow {
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--muted);
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background-color: var(--card);
+    border: 1px solid var(--blue);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.dropdown-item {
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.dropdown-item:hover {
+    background-color: var(--surface);
+}
+
+.dropdown-item.selected {
+    background-color: rgba(59, 130, 246, 0.2);
+    font-weight: 600;
+}
+
+/* Color Swatches */
+.color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.color-swatch {
+    padding: 16px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.color-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.color-value {
+    font-size: 0.7rem;
+    font-family: monospace;
+    opacity: 0.8;
+}
+
+.contrast-info {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--surface);
+    border-radius: 8px;
+    border-left: 3px solid var(--blue);
+}
+
+.contrast-info h3 {
+    margin: 0 0 8px 0;
+    font-size: 0.9rem;
+    color: var(--blue);
+}
+
+.contrast-info p {
+    margin: 4px 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🎨 Dropdown Contrast Test - Trading Terminal</h1>
+
+    <div class="test-section">
+        <div class="test-label">Native HTML Select (Recommended)</div>
+        <select class="native-select">
+            <option value="">Select an option...</option>
+            <option value="score">🏆 Rank: Score</option>
+            <option value="sharpe">📊 Rank: Sharpe</option>
+            <option value="return">💰 Rank: Return</option>
+            <option value="calmar">📈 Rank: Calmar</option>
+            <option value="stability">⚖️ Rank: Stability</option>
+        </select>
+    </div>
+
+    <div class="test-section">
+        <div class="test-label">Custom Dropdown Simulation</div>
+        <div class="custom-dropdown">
+            <div class="dropdown-button">
+                <span>🏆 Rank: Score</span>
+                <span class="dropdown-arrow"></span>
+            </div>
+            <div class="dropdown-menu">
+                <div class="dropdown-item selected">🏆 Rank: Score</div>
+                <div class="dropdown-item">📊 Rank: Sharpe</div>
+                <div class="dropdown-item">💰 Rank: Return</div>
+                <div class="dropdown-item">📈 Rank: Calmar</div>
+                <div class="dropdown-item">⚖️ Rank: Stability</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <div class="test-label">Color Palette</div>
+        <div class="color-grid">
+            <div class="color-swatch" style="background: #08090e; border: 1px solid #1e2433;">
+                <div class="color-name" style="color: #f8fafc;">Background</div>
+                <div class="color-value" style="color: #94a3b8;">#08090e</div>
+            </div>
+            <div class="color-swatch" style="background: #0f1117; border: 1px solid #1e2433;">
+                <div class="color-name" style="color: #f8fafc;">Card</div>
+                <div class="color-value" style="color: #94a3b8;">#0f1117</div>
+            </div>
+            <div class="color-swatch" style="background: #161b26; border: 1px solid #1e2433;">
+                <div class="color-name" style="color: #f8fafc;">Surface</div>
+                <div class="color-value" style="color: #94a3b8;">#161b26</div>
+            </div>
+            <div class="color-swatch" style="background: #1e2433; border: 1px solid #3b82f6;">
+                <div class="color-name" style="color: #f8fafc;">Border</div>
+                <div class="color-value" style="color: #94a3b8;">#1e2433</div>
+            </div>
+            <div class="color-swatch" style="background: #f8fafc;">
+                <div class="color-name" style="color: #08090e;">Text</div>
+                <div class="color-value" style="color: #161b26;">#f8fafc</div>
+            </div>
+            <div class="color-swatch" style="background: #94a3b8;">
+                <div class="color-name" style="color: #08090e;">Muted</div>
+                <div class="color-value" style="color: #0f1117;">#94a3b8</div>
+            </div>
+        </div>
+
+        <div class="contrast-info">
+            <h3>Contrast Ratios (WCAG AA requires 4.5:1 for normal text)</h3>
+            <p>✅ Text (#f8fafc) on Surface (#161b26): ~13.5:1 (Excellent)</p>
+            <p>✅ Text (#f8fafc) on Card (#0f1117): ~15.2:1 (Excellent)</p>
+            <p>✅ Muted (#94a3b8) on Surface (#161b26): ~6.8:1 (Good)</p>
+            <p>✅ Muted (#94a3b8) on Card (#0f1117): ~7.5:1 (Good)</p>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <div class="test-label">Text Samples on Different Backgrounds</div>
+        <div style="padding: 16px; background: #161b26; border-radius: 8px; margin-bottom: 12px;">
+            <div style="color: #f8fafc; font-size: 0.85rem; font-weight: 500; margin-bottom: 4px;">
+                Primary Text on Surface: This should be very readable
+            </div>
+            <div style="color: #94a3b8; font-size: 0.85rem;">
+                Muted Text on Surface: This should also be readable
+            </div>
+        </div>
+        <div style="padding: 16px; background: #0f1117; border-radius: 8px;">
+            <div style="color: #f8fafc; font-size: 0.85rem; font-weight: 500; margin-bottom: 4px;">
+                Primary Text on Card: This should be very readable
+            </div>
+            <div style="color: #94a3b8; font-size: 0.85rem;">
+                Muted Text on Card: This should also be readable
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Simple dropdown toggle for demo
+document.querySelector('.dropdown-button').addEventListener('click', function() {
+    const menu = document.querySelector('.dropdown-menu');
+    menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+});
+
+document.querySelectorAll('.dropdown-item').forEach(item => {
+    item.addEventListener('click', function() {
+        document.querySelectorAll('.dropdown-item').forEach(i => i.classList.remove('selected'));
+        this.classList.add('selected');
+        document.querySelector('.dropdown-button span:first-child').textContent = this.textContent;
+        document.querySelector('.dropdown-menu').style.display = 'none';
+    });
+});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.custom-dropdown')) {
+        document.querySelector('.dropdown-menu').style.display = 'none';
+    }
+});
+</script>
+</body>
+</html>

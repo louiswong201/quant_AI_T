@@ -16,24 +16,24 @@ from plotly.subplots import make_subplots
 # ── Design Tokens ─────────────────────────────────────────────────────
 
 _C = {
-    "bg":         "#0f1117",
-    "card":       "#1a1f2e",
-    "surface":    "#232a3b",
-    "border":     "#2d3548",
-    "text":       "#e6e8eb",
-    "muted":      "#8b95a5",
-    "green":      "#00d4aa",
-    "green_dim":  "rgba(0,212,170,0.12)",
-    "red":        "#ff4757",
-    "red_dim":    "rgba(255,71,87,0.12)",
+    "bg":         "#08090e",
+    "card":       "#0f1117",
+    "surface":    "#161b26",
+    "border":     "#1e2433",
+    "text":       "#f8fafc",
+    "muted":      "#94a3b8",
+    "green":      "#10b981",
+    "green_dim":  "rgba(16,185,129,0.12)",
+    "red":        "#ef4444",
+    "red_dim":    "rgba(239,68,68,0.12)",
     "blue":       "#3b82f6",
     "blue_dim":   "rgba(59,130,246,0.10)",
     "amber":      "#f59e0b",
-    "purple":     "#a855f7",
+    "purple":     "#8b5cf6",
     "cyan":       "#06b6d4",
-    "grid":       "rgba(45,53,72,0.5)",
-    "candle_up":  "#00d4aa",
-    "candle_dn":  "#ff4757",
+    "grid":       "rgba(30,36,51,0.6)",
+    "candle_up":  "#10b981",
+    "candle_dn":  "#ef4444",
 }
 
 _FONT = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
@@ -42,23 +42,38 @@ _LAYOUT_BASE = dict(
     font=dict(family=_FONT, color=_C["text"], size=12),
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor=_C["card"],
-    margin=dict(l=55, r=20, t=45, b=35),
+    margin=dict(l=65, r=30, t=60, b=45),
     hovermode="x unified",
     hoverlabel=dict(
-        bgcolor=_C["surface"], font_color=_C["text"],
-        bordercolor=_C["border"], font_size=12,
+        bgcolor=_C["surface"], 
+        font_color=_C["text"],
+        bordercolor=_C["blue"], 
+        font_size=11,
     ),
     legend=dict(
-        orientation="h", yanchor="top", y=1.12, xanchor="left", x=0,
-        bgcolor="rgba(0,0,0,0)", font=dict(size=11, color=_C["muted"]),
+        orientation="h", 
+        yanchor="top", 
+        y=1.08, 
+        xanchor="left", 
+        x=0,
+        bgcolor="rgba(0,0,0,0)", 
+        font=dict(size=10, color=_C["muted"]),
+        itemsizing="constant",
+        tracegroupgap=10,
     ),
     xaxis=dict(
-        gridcolor=_C["grid"], zerolinecolor=_C["grid"],
+        gridcolor=_C["grid"], 
+        zerolinecolor=_C["grid"],
         tickfont=dict(size=10, color=_C["muted"]),
+        showgrid=True,
+        gridwidth=0.5,
     ),
     yaxis=dict(
-        gridcolor=_C["grid"], zerolinecolor=_C["grid"],
+        gridcolor=_C["grid"], 
+        zerolinecolor=_C["grid"],
         tickfont=dict(size=10, color=_C["muted"]),
+        showgrid=True,
+        gridwidth=0.5,
     ),
 )
 
@@ -127,12 +142,12 @@ def build_candlestick_chart(
     """Candlestick + volume + buy/sell markers + SL/TP lines + MA overlays."""
     fig = make_subplots(
         rows=2, cols=1, row_heights=[0.78, 0.22],
-        shared_xaxes=True, vertical_spacing=0.03,
+        shared_xaxes=True, vertical_spacing=0.04,
     )
 
     if ohlcv_df.empty:
         _apply_base(fig, height=420,
-                    title=dict(text=title, font=dict(size=14, color=_C["muted"])))
+                    title=dict(text=title, font=dict(size=13, color=_C["muted"])))
         return fig
 
     # Normalize x-axis time and de-duplicate rows for stable rendering.
@@ -141,34 +156,51 @@ def build_candlestick_chart(
     ohlcv_df[date_col] = pd.to_datetime(ohlcv_df[date_col], errors="coerce", utc=True)
     ohlcv_df = ohlcv_df.dropna(subset=[date_col, "open", "high", "low", "close"])
     ohlcv_df = ohlcv_df.sort_values(date_col).drop_duplicates(subset=[date_col], keep="last")
+    
     if ohlcv_df.empty:
         _apply_base(fig, height=420,
-                    title=dict(text=title, font=dict(size=14, color=_C["muted"])))
+                    title=dict(text=title, font=dict(size=13, color=_C["muted"])))
         return fig
 
+    # Create integer index for x-axis to avoid gaps
+    ohlcv_df = ohlcv_df.reset_index(drop=True)
+    x_data = list(range(len(ohlcv_df)))
+    
+    # Store original dates for hover text
+    date_strings = ohlcv_df[date_col].dt.strftime("%Y-%m-%d %H:%M").tolist()
+
     fig.add_trace(go.Candlestick(
-        x=ohlcv_df[date_col],
-        open=ohlcv_df["open"], high=ohlcv_df["high"],
-        low=ohlcv_df["low"], close=ohlcv_df["close"],
+        x=x_data,
+        open=ohlcv_df["open"], 
+        high=ohlcv_df["high"],
+        low=ohlcv_df["low"], 
+        close=ohlcv_df["close"],
         name="OHLC",
-        increasing=dict(line=dict(color=_C["candle_up"]), fillcolor=_C["candle_up"]),
-        decreasing=dict(line=dict(color=_C["candle_dn"]), fillcolor=_C["candle_dn"]),
+        increasing=dict(line=dict(color=_C["candle_up"], width=1.2), fillcolor=_C["candle_up"]),
+        decreasing=dict(line=dict(color=_C["candle_dn"], width=1.2), fillcolor=_C["candle_dn"]),
+        showlegend=True,
+        hovertext=date_strings,
+        hoverinfo="text+y",
     ), row=1, col=1)
 
     if show_ma and "close" in ohlcv_df.columns and len(ohlcv_df) >= 20:
-        close = ohlcv_df["close"]
+        close = ohlcv_df["close"].ffill()
         ma20 = close.rolling(20, min_periods=20).mean()
         ma50 = close.rolling(50, min_periods=50).mean()
         fig.add_trace(go.Scatter(
-            x=ohlcv_df[date_col], y=ma20, name="MA20",
-            mode="lines", line=dict(color=_C["amber"], width=1.2, dash="dot"),
-            opacity=0.7,
+            x=x_data, y=ma20, name="MA20",
+            mode="lines", line=dict(color=_C["amber"], width=2, dash="dot"),
+            opacity=0.8,
+            showlegend=True,
+            hoverinfo="skip",
         ), row=1, col=1)
         if ma50.notna().any():
             fig.add_trace(go.Scatter(
-                x=ohlcv_df[date_col], y=ma50, name="MA50",
-                mode="lines", line=dict(color=_C["purple"], width=1.2, dash="dot"),
-                opacity=0.7,
+                x=x_data, y=ma50, name="MA50",
+                mode="lines", line=dict(color=_C["purple"], width=2, dash="dot"),
+                opacity=0.8,
+                showlegend=True,
+                hoverinfo="skip",
             ), row=1, col=1)
 
     if sl_tp_levels:
@@ -203,46 +235,109 @@ def build_candlestick_chart(
             for o, c in zip(ohlcv_df["open"], ohlcv_df["close"])
         ]
         fig.add_trace(go.Bar(
-            x=ohlcv_df[date_col], y=ohlcv_df["volume"],
-            name="Volume", marker_color=colors, opacity=0.35,
+            x=x_data, 
+            y=ohlcv_df["volume"],
+            name="Volume", 
+            marker_color=colors, 
+            opacity=0.4,
             showlegend=False,
+            hoverinfo="skip",
         ), row=2, col=1)
 
     if trades_df is not None and not trades_df.empty:
         ts_col = "timestamp" if "timestamp" in trades_df.columns else trades_df.columns[0]
+        trades_df = trades_df.copy()
+        trades_df[ts_col] = pd.to_datetime(trades_df[ts_col], errors="coerce", utc=True)
+        
+        # Map trade timestamps to x_data indices
+        trade_indices = []
+        for trade_time in trades_df[ts_col]:
+            idx = (ohlcv_df[date_col] - trade_time).abs().idxmin()
+            trade_indices.append(idx)
+        
+        trades_df["x_idx"] = trade_indices
+        
         buys = trades_df[trades_df["side"] == "buy"]
         sells = trades_df[trades_df["side"] == "sell"]
+        
         if not buys.empty:
             fig.add_trace(go.Scatter(
-                x=buys[ts_col], y=buys["price"],
+                x=buys["x_idx"], y=buys["price"],
                 mode="markers", name="BUY",
                 marker=dict(
-                    symbol="triangle-up", size=13,
-                    color=_C["green"], line=dict(width=1.5, color="#fff"),
+                    symbol="triangle-up", size=14,
+                    color=_C["green"], 
+                    line=dict(width=2, color=_C["card"]),
                 ),
+                showlegend=True,
             ), row=1, col=1)
         if not sells.empty:
             fig.add_trace(go.Scatter(
-                x=sells[ts_col], y=sells["price"],
+                x=sells["x_idx"], y=sells["price"],
                 mode="markers", name="SELL",
                 marker=dict(
-                    symbol="triangle-down", size=13,
-                    color=_C["red"], line=dict(width=1.5, color="#fff"),
+                    symbol="triangle-down", size=14,
+                    color=_C["red"], 
+                    line=dict(width=2, color=_C["card"]),
                 ),
+                showlegend=True,
             ), row=1, col=1)
 
+    # Create custom tick labels showing dates at regular intervals
+    n_ticks = min(12, len(ohlcv_df))
+    tick_indices = np.linspace(0, len(ohlcv_df) - 1, n_ticks, dtype=int)
+    tick_labels = [ohlcv_df[date_col].iloc[i].strftime("%m/%d %H:%M") for i in tick_indices]
+    
     _apply_base(fig, height=420,
-                title=dict(text=title.upper(), font=dict(size=14, color=_C["muted"])))
+                title=dict(text=title.upper(), font=dict(size=13, color=_C["muted"], weight=600)))
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        xaxis=dict(autorange=True),
-        xaxis2=dict(autorange=True),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor=_C["grid"],
+            tickmode="array",
+            tickvals=tick_indices.tolist(),
+            ticktext=tick_labels,
+            tickangle=-45,
+        ),
+        xaxis2=dict(
+            showgrid=True,
+            gridcolor=_C["grid"],
+            tickmode="array",
+            tickvals=tick_indices.tolist(),
+            ticktext=tick_labels,
+            tickangle=-45,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=9, color=_C["muted"]),
+            itemsizing="constant",
+            tracegroupgap=8,
+        ),
     )
-    fig.update_yaxes(title_text="Price", row=1, col=1,
-                     gridcolor=_C["grid"], tickfont=dict(size=10, color=_C["muted"]))
-    fig.update_yaxes(title_text="Vol", row=2, col=1,
-                     gridcolor=_C["grid"], tickfont=dict(size=10, color=_C["muted"]))
-    fig.update_xaxes(gridcolor=_C["grid"], tickfont=dict(size=10, color=_C["muted"]))
+    fig.update_yaxes(
+        title_text="Price", 
+        row=1, col=1,
+        gridcolor=_C["grid"], 
+        tickfont=dict(size=10, color=_C["muted"]),
+        side="right",
+    )
+    fig.update_yaxes(
+        title_text="Vol", 
+        row=2, col=1,
+        gridcolor=_C["grid"], 
+        tickfont=dict(size=10, color=_C["muted"]),
+        side="right",
+    )
+    fig.update_xaxes(
+        gridcolor=_C["grid"], 
+        tickfont=dict(size=9, color=_C["muted"])
+    )
     return fig
 
 

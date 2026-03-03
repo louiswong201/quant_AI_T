@@ -22,7 +22,10 @@ from __future__ import annotations
 import gc
 import os
 import platform
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 import sys
 import time
 import tracemalloc
@@ -64,21 +67,63 @@ def get_system_info() -> Dict[str, str]:
         "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
         "python": platform.python_version(),
     }
-    try:
-        import subprocess
-        result = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
-                                capture_output=True, text=True, timeout=3)
-        info["cpu"] = result.stdout.strip()
-    except Exception:
+    cpu_found = False
+    if platform.system() == "Darwin":
+        try:
+            import subprocess
+            result = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                    capture_output=True, text=True, timeout=3)
+            if result.returncode == 0 and result.stdout.strip():
+                info["cpu"] = result.stdout.strip()
+                cpu_found = True
+        except Exception:
+            pass
+    if not cpu_found and platform.system() == "Windows":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["wmic", "cpu", "get", "Name", "/value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("Name="):
+                    info["cpu"] = line.split("=", 1)[1].strip()
+                    cpu_found = True
+                    break
+        except Exception:
+            pass
+    if not cpu_found:
         info["cpu"] = platform.processor() or "Unknown"
-    try:
-        import subprocess
-        result = subprocess.run(["sysctl", "-n", "hw.memsize"],
-                                capture_output=True, text=True, timeout=3)
-        mem_bytes = int(result.stdout.strip())
-        info["ram"] = f"{mem_bytes / (1024**3):.0f} GB"
-    except Exception:
+
+    ram_found = False
+    if platform.system() == "Darwin":
+        try:
+            import subprocess
+            result = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                    capture_output=True, text=True, timeout=3)
+            mem_bytes = int(result.stdout.strip())
+            info["ram"] = f"{mem_bytes / (1024**3):.0f} GB"
+            ram_found = True
+        except Exception:
+            pass
+    if not ram_found and platform.system() == "Windows":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["wmic", "ComputerSystem", "get", "TotalPhysicalMemory", "/value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("TotalPhysicalMemory="):
+                    mem_bytes = int(line.split("=", 1)[1].strip())
+                    info["ram"] = f"{mem_bytes / (1024**3):.0f} GB"
+                    ram_found = True
+                    break
+        except Exception:
+            pass
+    if not ram_found:
         info["ram"] = "Unknown"
+
     info["cores"] = str(os.cpu_count())
     try:
         import numba
@@ -777,7 +822,8 @@ def main():
         api_result, scaling_results, memory_results,
         real_data_results, features, total_time,
     )
-    report_path = REPORT_DIR / "technical_benchmark_report.md"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = REPORT_DIR / f"technical_benchmark_report_{timestamp}.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"  Report saved: {report_path}")
