@@ -7,7 +7,9 @@ Publishes state updates via callbacks for the dashboard.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
+import platform
 import signal
 import time
 from datetime import datetime, timezone
@@ -73,12 +75,15 @@ class TradingRunner:
 
     async def run(self, lookback: int = 200) -> None:
         self._running = True
-        loop = asyncio.get_event_loop()
-        for sig_name in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig_name, self._shutdown)
-            except NotImplementedError:
-                pass
+        loop = asyncio.get_running_loop()
+        if platform.system() != "Windows":
+            for sig_name in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig_name, self._shutdown)
+                except NotImplementedError:
+                    pass
+        else:
+            atexit.register(self._shutdown)
 
         logger.info("Starting price feeds...")
         await self._feed.start_all(lookback=lookback)

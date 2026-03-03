@@ -11,6 +11,7 @@ Public API:
 
 from __future__ import annotations
 
+import logging as _logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,7 +19,11 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
+from ..platform_config import check_numba_cache
 from .config import BacktestConfig
+
+_logger = _logging.getLogger(__name__)
+check_numba_cache()
 from .kernels import (
     DEFAULT_PARAM_GRIDS,
     KERNEL_NAMES,

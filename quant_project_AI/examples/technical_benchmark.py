@@ -128,9 +128,18 @@ def get_system_info() -> Dict[str, str]:
     try:
         import numba
         info["numba"] = numba.__version__
-    except ImportError:
+        info["numba_threads"] = os.environ.get("NUMBA_NUM_THREADS", str(numba.config.NUMBA_NUM_THREADS))
+        info["threading_layer"] = os.environ.get("NUMBA_THREADING_LAYER", "default")
+    except (ImportError, AttributeError):
         info["numba"] = "N/A"
     info["numpy"] = np.__version__
+
+    try:
+        from quant_framework.platform_config import check_numba_cache
+        info["numba_cache"] = "valid" if check_numba_cache() else "missing"
+    except Exception:
+        info["numba_cache"] = "unknown"
+
     return info
 
 
@@ -536,7 +545,9 @@ def generate_report(
     lines.append("|:-----|:---|")
     for k, v in sys_info.items():
         label = {"os":"操作系统","cpu":"CPU","ram":"内存","cores":"核心数",
-                 "python":"Python","numba":"Numba","numpy":"NumPy"}.get(k, k)
+                 "python":"Python","numba":"Numba","numpy":"NumPy",
+                 "numba_threads":"Numba线程数","threading_layer":"线程层",
+                 "numba_cache":"Numba缓存"}.get(k, k)
         lines.append(f"| {label} | {v} |")
     lines.append("")
 

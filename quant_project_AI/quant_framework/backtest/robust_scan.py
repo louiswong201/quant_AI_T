@@ -33,8 +33,10 @@ Public API:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from itertools import combinations
@@ -47,6 +49,7 @@ from scipy import stats as sp_stats
 from .config import BacktestConfig
 from .kernels import (
     DEFAULT_PARAM_GRIDS,
+    INDICATOR_DEPS,
     KERNEL_NAMES,
     _atr,
     _score,
@@ -62,6 +65,9 @@ from .kernels import (
     precompute_up_prefix,
     scan_all_kernels,
 )
+from ..platform_config import optimal_thread_config
+
+logger = logging.getLogger(__name__)
 
 # =====================================================================
 #  Default walk-forward configuration
@@ -288,6 +294,33 @@ def _robustness_one_path(kind, idx, sn, bp, c_oos, o_oos, h_oos, l_oos,
     return kind, ret
 
 
+def _batch_robustness(sn, bp, c_oos, o_oos, h_oos, l_oos,
+                      sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+                      n_mc, n_shuffle, n_bootstrap,
+                      mc_noise_std, bootstrap_block):
+    """Run ALL robustness paths for one strategy in a single thread.
+
+    Reduces ThreadPoolExecutor scheduling overhead from ~70 granular tasks
+    per strategy to 1 batched task.  Returns (mc_rets, shuf_rets, boot_rets).
+    """
+    mc_rets = []
+    for i in range(n_mc):
+        cp, op, hp, lp = perturb_ohlc(c_oos, o_oos, h_oos, l_oos, mc_noise_std, 42000 + i)
+        r, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        mc_rets.append(r)
+    shuf_rets = []
+    for i in range(n_shuffle):
+        cp, op, hp, lp = shuffle_ohlc(c_oos, o_oos, h_oos, l_oos, 50000 + i)
+        r, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        shuf_rets.append(r)
+    boot_rets = []
+    for i in range(n_bootstrap):
+        cp, op, hp, lp = block_bootstrap_ohlc(c_oos, o_oos, h_oos, l_oos, bootstrap_block, 60000 + i)
+        r, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        boot_rets.append(r)
+    return mc_rets, shuf_rets, boot_rets
+
+
 def run_robust_scan(
     symbols: List[str],
     data: Dict[str, Dict[str, np.ndarray]],
@@ -339,7 +372,8 @@ def run_robust_scan(
     lev, dc = costs["lev"], costs["dc"]
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
-    rob_workers = n_robustness_threads or min(8, os.cpu_count() or 4)
+    _tc = optimal_thread_config()
+    rob_workers = n_robustness_threads or _tc["robustness_workers"]
 
     scan_kwargs: Dict[str, Any] = {}
     if param_grids is not None:
@@ -351,7 +385,8 @@ def run_robust_scan(
     total_combos = 0
     t0 = time.time()
 
-    for sym in symbols:
+    n_symbols = sum(1 for s in symbols if s in data)
+    for sym_idx, sym in enumerate(symbols):
         if sym not in data:
             continue
         D = data[sym]
@@ -360,7 +395,9 @@ def run_robust_scan(
         if n < 100:
             continue
 
-        # ── Precompute ALL indicators ONCE on full data ──
+        logger.info("[WF] Symbol %d/%d: %s (%d bars)", sym_idx + 1, n_symbols, sym, n)
+
+        # ── Lazy precomputation: only compute indicators the strategies need ──
         grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
         max_period = 200
         for _gv in grids.values():
@@ -370,17 +407,21 @@ def run_robust_scan(
                         max_period = int(_v)
         max_period = min(max_period + 1, n - 1)
 
-        full_mas = precompute_all_ma(c, max_period)
-        full_emas = precompute_all_ema(c, max_period)
-        full_rsis = precompute_all_rsi(c, max_period)
-        full_atr10 = _atr(h, l, c, 10)
-        full_atr14 = _atr(h, l, c, 14)
-        full_atr20 = _atr(h, l, c, 20)
-        full_rmax_h = precompute_rolling_max(h, max_period)
-        full_rmin_l = precompute_rolling_min(l, max_period)
-        full_stds = precompute_all_rolling_std(c, max_period)
-        full_vols = precompute_rolling_vol(c, max_period)
-        full_up = precompute_up_prefix(c)
+        _needed: set = set()
+        for _sn in strat_names:
+            _needed |= INDICATOR_DEPS.get(_sn, frozenset())
+
+        full_mas = precompute_all_ma(c, max_period) if "mas" in _needed else None
+        full_emas = precompute_all_ema(c, max_period) if "emas" in _needed else None
+        full_rsis = precompute_all_rsi(c, max_period) if "rsis" in _needed else None
+        full_atr10 = _atr(h, l, c, 10) if "atr" in _needed else None
+        full_atr14 = _atr(h, l, c, 14) if "atr" in _needed else None
+        full_atr20 = _atr(h, l, c, 20) if "atr" in _needed else None
+        full_rmax_h = precompute_rolling_max(h, max_period) if "rmax_h" in _needed else None
+        full_rmin_l = precompute_rolling_min(l, max_period) if "rmin_l" in _needed else None
+        full_stds = precompute_all_rolling_std(c, max_period) if "stds" in _needed else None
+        full_vols = precompute_rolling_vol(c, max_period) if "vols" in _needed else None
+        full_up = precompute_up_prefix(c) if "up_prefix" in _needed else None
 
         best_params_last: Dict[str, Any] = {sn: None for sn in strat_names}
         wfe_vals: Dict[str, list] = {sn: [] for sn in strat_names}
@@ -390,7 +431,9 @@ def run_robust_scan(
         oos_nt_vals: Dict[str, list] = {sn: [] for sn in strat_names}
 
         # --- Layer 1: Purged Walk-Forward ---
+        n_windows = len(windows)
         for wi, (tr_pct, va_pct, te_pct) in enumerate(windows):
+            logger.info("  [%s] WF window %d/%d (train %.0f%%)", sym, wi + 1, n_windows, tr_pct * 100)
             tr_end = int(n * tr_pct)
             va_start = min(tr_end + embargo, int(n * va_pct))
             va_end = int(n * va_pct)
@@ -409,17 +452,17 @@ def run_robust_scan(
 
             train_results = scan_all_kernels(
                 c_tr, o_tr, h_tr, l_tr, config,
-                mas=full_mas[:, :tr_end],
-                emas=full_emas[:, :tr_end],
-                rsis=full_rsis[:, :tr_end],
-                atr10=full_atr10[:tr_end],
-                atr14=full_atr14[:tr_end],
-                atr20=full_atr20[:tr_end],
-                rmax_h=full_rmax_h[:, :tr_end],
-                rmin_l=full_rmin_l[:, :tr_end],
-                stds=full_stds[:, :tr_end],
-                vols=full_vols[:, :tr_end],
-                up_prefix=full_up[:tr_end],
+                mas=full_mas[:, :tr_end] if full_mas is not None else None,
+                emas=full_emas[:, :tr_end] if full_emas is not None else None,
+                rsis=full_rsis[:, :tr_end] if full_rsis is not None else None,
+                atr10=full_atr10[:tr_end] if full_atr10 is not None else None,
+                atr14=full_atr14[:tr_end] if full_atr14 is not None else None,
+                atr20=full_atr20[:tr_end] if full_atr20 is not None else None,
+                rmax_h=full_rmax_h[:, :tr_end] if full_rmax_h is not None else None,
+                rmin_l=full_rmin_l[:, :tr_end] if full_rmin_l is not None else None,
+                stds=full_stds[:, :tr_end] if full_stds is not None else None,
+                vols=full_vols[:, :tr_end] if full_vols is not None else None,
+                up_prefix=full_up[:tr_end] if full_up is not None else None,
                 **scan_kwargs,
             )
 
@@ -484,8 +527,7 @@ def run_robust_scan(
         else:
             score_threshold = -1e18
 
-        # --- Layers 6-8: parallel robustness (MC/Shuffle/Bootstrap) ---
-        rob_tasks = []
+        # --- Layers 6-8: batched parallel robustness (MC/Shuffle/Bootstrap) ---
         rob_strats = []
         for sn in strat_names:
             bp = best_params_last.get(sn)
@@ -493,45 +535,41 @@ def run_robust_scan(
                 continue
             if wf_scores.get(sn, -1e18) < score_threshold:
                 continue
-            rob_strats.append(sn)
-            for mi in range(n_mc_paths):
-                rob_tasks.append(("mc", mi, sn, bp))
-            for si in range(n_shuffle_paths):
-                rob_tasks.append(("shuffle", si, sn, bp))
-            for bi in range(n_bootstrap_paths):
-                rob_tasks.append(("bootstrap", bi, sn, bp))
+            rob_strats.append((sn, bp))
 
-        if rob_tasks:
-            mc_all: Dict[str, list] = {sn: [] for sn in rob_strats}
-            shuf_all: Dict[str, list] = {sn: [] for sn in rob_strats}
-            boot_all: Dict[str, list] = {sn: [] for sn in rob_strats}
+        mc_all: Dict[str, list] = {}
+        shuf_all: Dict[str, list] = {}
+        boot_all: Dict[str, list] = {}
+
+        if rob_strats:
+            n_paths = n_mc_paths + n_shuffle_paths + n_bootstrap_paths
+            logger.info("  [%s] Robustness: %d strategies × %d paths, %d workers (batched)",
+                        sym, len(rob_strats), n_paths, rob_workers)
 
             with ThreadPoolExecutor(max_workers=rob_workers) as pool:
                 futures = {}
-                for kind, idx, sn, bp in rob_tasks:
+                for sn, bp in rob_strats:
                     fut = pool.submit(
-                        _robustness_one_path, kind, idx, sn, bp,
+                        _batch_robustness, sn, bp,
                         c_oos, o_oos, h_oos, l_oos,
                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+                        n_mc_paths, n_shuffle_paths, n_bootstrap_paths,
                         mc_noise_std, bootstrap_block,
                     )
                     futures[fut] = sn
                 for fut in as_completed(futures):
                     sn = futures[fut]
-                    kind, ret = fut.result()
-                    if kind == "mc":
-                        mc_all[sn].append(ret)
-                    elif kind == "shuffle":
-                        shuf_all[sn].append(ret)
-                    else:
-                        boot_all[sn].append(ret)
+                    mc_rets, shuf_rets, boot_rets = fut.result()
+                    mc_all[sn] = mc_rets
+                    shuf_all[sn] = shuf_rets
+                    boot_all[sn] = boot_rets
 
-            for sn in rob_strats:
+            for sn, _bp in rob_strats:
                 if sn not in sym_results:
                     continue
-                mc = mc_all[sn]
-                shuf = shuf_all[sn]
-                boot = boot_all[sn]
+                mc = mc_all.get(sn, [])
+                shuf = shuf_all.get(sn, [])
+                boot = boot_all.get(sn, [])
                 sym_results[sn]["mc_mean"] = float(np.mean(mc)) if mc else 0.0
                 sym_results[sn]["mc_std"] = float(np.std(mc)) if mc else 0.0
                 sym_results[sn]["mc_pct_positive"] = sum(1 for x in mc if x > 0) / max(1, len(mc))
@@ -614,9 +652,18 @@ class CPCVResult:
 
 
 def _concat_ranges(arr: np.ndarray, ranges: List[Tuple[int, int]]) -> np.ndarray:
-    """Concatenate slices of *arr* specified by half-open ranges."""
-    parts = [arr[s:e] for s, e in ranges]
-    return np.concatenate(parts) if parts else np.empty(0, dtype=np.float64)
+    """Concatenate slices of *arr* specified by half-open ranges.
+
+    Optimised: returns a zero-copy slice when the ranges form a single
+    contiguous region, avoiding an ``np.concatenate`` allocation.
+    """
+    if not ranges:
+        return np.empty(0, dtype=np.float64)
+    if len(ranges) == 1:
+        return arr[ranges[0][0]:ranges[0][1]]
+    if all(ranges[i][1] == ranges[i + 1][0] for i in range(len(ranges) - 1)):
+        return arr[ranges[0][0]:ranges[-1][1]]
+    return np.concatenate([arr[s:e] for s, e in ranges])
 
 
 def run_cpcv_scan(
@@ -663,7 +710,8 @@ def run_cpcv_scan(
     lev, dc = costs["lev"], costs["dc"]
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
-    rob_workers = n_robustness_threads or min(8, os.cpu_count() or 4)
+    _tc = optimal_thread_config()
+    rob_workers = n_robustness_threads or _tc["robustness_workers"]
 
     scan_kwargs: Dict[str, Any] = {}
     if param_grids is not None:
@@ -675,7 +723,8 @@ def run_cpcv_scan(
     total_combos = 0
     t0 = time.time()
 
-    for sym in symbols:
+    n_symbols = sum(1 for s in symbols if s in data)
+    for sym_idx, sym in enumerate(symbols):
         if sym not in data:
             continue
         D = data[sym]
@@ -687,6 +736,9 @@ def run_cpcv_scan(
         splits = cpcv_splits(n, n_groups, n_test_groups, embargo)
         result.n_splits = len(splits)
 
+        logger.info("[CPCV] Symbol %d/%d: %s (%d bars, %d splits)",
+                    sym_idx + 1, n_symbols, sym, n, len(splits))
+
         oos_rets: Dict[str, List[float]] = {sn: [] for sn in strat_names}
         oos_dds: Dict[str, List[float]] = {sn: [] for sn in strat_names}
         oos_nts: Dict[str, List[int]] = {sn: [] for sn in strat_names}
@@ -694,6 +746,7 @@ def run_cpcv_scan(
         mc_tasks_deferred: List[Tuple[str, Any, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]] = []
 
         for si, (train_ranges, test_ranges) in enumerate(splits):
+            logger.info("  [%s] CPCV split %d/%d", sym, si + 1, len(splits))
             c_tr = _concat_ranges(c, train_ranges)
             o_tr = _concat_ranges(o, train_ranges)
             h_tr = _concat_ranges(h, train_ranges)
@@ -738,6 +791,8 @@ def run_cpcv_scan(
         # --- Batch MC checks across all splits with ThreadPoolExecutor ---
         mc_rets_all: Dict[str, List[float]] = {sn: [] for sn in strat_names}
         if mc_tasks_deferred:
+            logger.info("  [%s] CPCV MC robustness: %d tasks, %d workers",
+                        sym, len(mc_tasks_deferred) * n_mc_paths, rob_workers)
             with ThreadPoolExecutor(max_workers=rob_workers) as pool:
                 futures = []
                 for sn, bp, c_te, o_te, h_te, l_te, si in mc_tasks_deferred:
