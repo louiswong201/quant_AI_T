@@ -49,9 +49,10 @@ class PortfolioTracker:
         self._portfolio_values = np.empty(n_bars, dtype=np.float64)
         self._cumulative_returns = np.empty(n_bars, dtype=np.float64)
         self._daily_returns = np.empty(n_bars, dtype=np.float64)
+        self._cash_arr = np.empty(n_bars, dtype=np.float64)
+        self._dates_arr: List[Any] = [None] * n_bars
 
         self._trades: List[Dict[str, Any]] = []
-        self._bar_results: List[Dict[str, Any]] = []
 
         self._config = config or BacktestConfig()
         self._liquidated = False
@@ -247,26 +248,17 @@ class PortfolioTracker:
     def record_bar(self, bar_index: int, date: pd.Timestamp) -> None:
         pv = self._portfolio_value
         self._portfolio_values[bar_index] = pv
-        self._cumulative_returns[bar_index] = (
-            (pv - self._initial_capital) / self._initial_capital
-        )
+        ic = self._initial_capital
+        self._cumulative_returns[bar_index] = (pv - ic) / ic
 
         if bar_index == 0:
-            self._daily_returns[bar_index] = (
-                (pv - self._initial_capital) / self._initial_capital
-            )
+            self._daily_returns[bar_index] = (pv - ic) / ic
         else:
             prev = self._portfolio_values[bar_index - 1]
             self._daily_returns[bar_index] = (pv - prev) / prev if prev > 0 else 0.0
 
-        self._bar_results.append({
-            "date": date,
-            "portfolio_value": pv,
-            "cash": self._cash,
-            "positions": dict(self._positions),
-            "daily_return": self._daily_returns[bar_index],
-            "cumulative_return": self._cumulative_returns[bar_index],
-        })
+        self._cash_arr[bar_index] = self._cash
+        self._dates_arr[bar_index] = date
 
     # -----------------------------------------------------------------
     # Queries
@@ -279,8 +271,15 @@ class PortfolioTracker:
         return self._positions.get(symbol, 0)
 
     def to_results_dict(self) -> Dict[str, Any]:
+        results_df = pd.DataFrame({
+            "date": self._dates_arr,
+            "portfolio_value": self._portfolio_values,
+            "cash": self._cash_arr,
+            "daily_return": self._daily_returns,
+            "cumulative_return": self._cumulative_returns,
+        })
         return {
-            "results": pd.DataFrame(self._bar_results),
+            "results": results_df,
             "trades": pd.DataFrame(self._trades) if self._trades else pd.DataFrame(),
             "daily_returns": self._daily_returns,
             "cumulative_returns": self._cumulative_returns,

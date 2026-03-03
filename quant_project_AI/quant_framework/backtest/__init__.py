@@ -256,6 +256,7 @@ def optimize(
     strategies: Optional[List[str]] = None,
     param_grids: Optional[Dict[str, List[tuple]]] = None,
     method: str = "wf",
+    **scan_kwargs,
 ) -> OptimizeResult:
     """Find the best strategy and parameters with anti-overfitting.
 
@@ -268,6 +269,8 @@ def optimize(
         param_grids: Custom parameter grids per strategy.
         method:      ``"wf"`` — purged walk-forward (10-layer, default).
                      ``"cpcv"`` — Combinatorial Purged Cross-Validation.
+        **scan_kwargs: Extra keyword arguments forwarded to
+                       ``run_robust_scan`` or ``run_cpcv_scan``.
 
     Returns:
         OptimizeResult with best strategy, full ranking, robustness metrics.
@@ -288,6 +291,7 @@ def optimize(
             config=config,
             strategies=strategies,
             param_grids=param_grids,
+            **scan_kwargs,
         )
         merged = _merge_across_symbols_cpcv(raw)
         score_key = "cpcv_score"
@@ -298,6 +302,7 @@ def optimize(
             config=config,
             strategies=strategies,
             param_grids=param_grids,
+            **scan_kwargs,
         )
         merged = _merge_across_symbols(raw)
         score_key = "wf_score"

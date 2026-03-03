@@ -183,19 +183,19 @@ def _load_csv(path: Path) -> Optional[pd.DataFrame]:
 
 def load_tf_data(tf: str):
     crypto, stocks = {}, {}
-    if tf == "1d":
-        sub = DATA_DIR
-        suffix = ".csv"
-    else:
-        sub = DATA_DIR / tf
-        suffix = f"_{tf}.csv"
+    sub = DATA_DIR / tf
+    suffix = f"_{tf}.csv"
     for sym in CRYPTO_ASSETS:
         path = sub / f"{sym}{suffix}"
+        if not path.exists() and tf == "1d":
+            path = DATA_DIR / f"{sym}.csv"
         df = _load_csv(path)
         if df is not None and len(df) >= MIN_BARS:
             crypto[sym] = df
     for sym in STOCK_ASSETS:
         path = sub / f"{sym}{suffix}"
+        if not path.exists() and tf == "1d":
+            path = DATA_DIR / f"{sym}.csv"
         df = _load_csv(path)
         if df is not None and len(df) >= MIN_BARS:
             stocks[sym] = df
@@ -208,14 +208,31 @@ def run_optimization(data_map, config, label, grids):
     print(f"\n  Optimizing [{label}]: {list(data_map.keys())}")
     t0 = time.perf_counter()
     kwargs = {"param_grids": grids} if grids else {}
-    wf = optimize(data_map, config, method="wf", **kwargs)
+
+    avg_bars = int(np.mean([len(d) for d in data_map.values()]))
+    total_bars = sum(len(d) for d in data_map.values())
+    wf_extra = {}
+    cpcv_extra = {}
+    if avg_bars > 15_000:
+        from quant_framework.backtest.robust_scan import COMPACT_WF_WINDOWS
+        wf_extra = {
+            "n_mc_paths": 15, "n_shuffle_paths": 10, "n_bootstrap_paths": 10,
+            "wf_windows": COMPACT_WF_WINDOWS,
+        }
+        cpcv_extra = {"n_groups": 4, "n_mc_paths": 5}
+    elif avg_bars > 5_000 or total_bars > 25_000:
+        wf_extra = {"n_mc_paths": 20, "n_shuffle_paths": 15, "n_bootstrap_paths": 15}
+        cpcv_extra = {"n_groups": 5, "n_mc_paths": 8}
+
+    wf = optimize(data_map, config, method="wf", **kwargs, **wf_extra)
     wf_t = time.perf_counter() - t0
     print(f"    WF: {wf.total_combos:,} combos in {wf_t:.1f}s "
           f"({wf.total_combos / max(0.1, wf_t):,.0f}/s)")
-    t0 = time.perf_counter()
-    cpcv = optimize(data_map, config, method="cpcv", **kwargs)
-    cpcv_t = time.perf_counter() - t0
+    t1 = time.perf_counter()
+    cpcv = optimize(data_map, config, method="cpcv", **kwargs, **cpcv_extra)
+    cpcv_t = time.perf_counter() - t1
     print(f"    CPCV: {cpcv.total_combos:,} combos in {cpcv_t:.1f}s")
+    print(f"    Total: {time.perf_counter() - t0:.1f}s")
     return wf, cpcv
 
 
@@ -250,17 +267,29 @@ def run_detailed(strat_name, params, data_map, config):
             "portfolio_values": pv, "bar_returns": rets, "performance": perf}
 
 
+def _lev_one(sn, params, data_map, config_fn, tf, lev):
+    cfg = config_fn(leverage=lev, interval=tf)
+    r = run_detailed(sn, params, data_map, cfg)
+    if r:
+        r["leverage"] = lev
+    return sn, lev, r
+
+
 def run_leverage(top_strats, data_map, config_fn, tf):
-    results = {}
-    for sn, params in top_strats:
-        sl = []
-        for lev in LEVERAGE_LEVELS:
-            cfg = config_fn(leverage=lev, interval=tf)
-            r = run_detailed(sn, params, data_map, cfg)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = {sn: [] for sn, _ in top_strats}
+    tasks = [(sn, params, lev) for sn, params in top_strats for lev in LEVERAGE_LEVELS]
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as pool:
+        futures = {
+            pool.submit(_lev_one, sn, params, data_map, config_fn, tf, lev): (sn, lev)
+            for sn, params, lev in tasks
+        }
+        for fut in as_completed(futures):
+            sn, lev, r = fut.result()
             if r:
-                r["leverage"] = lev
-                sl.append(r)
-        results[sn] = sl
+                results[sn].append(r)
+    for sn in results:
+        results[sn].sort(key=lambda x: x["leverage"])
     return results
 
 

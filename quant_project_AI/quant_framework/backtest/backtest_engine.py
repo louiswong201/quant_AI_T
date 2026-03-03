@@ -54,10 +54,10 @@ def _to_f64(arr: np.ndarray) -> np.ndarray:
 
 
 def _rolling_vol(close: np.ndarray, window: int) -> np.ndarray:
-    """Rolling return volatility via vectorised numpy (no Python for-loop).
+    """Rolling return volatility — O(n) via cumulative-sum trick.
 
-    Old implementation used two Python for-loops (O(n*window)).
-    This version: O(n) using cumulative sum of squared returns.
+    Computes std(returns) over a sliding window using running sums of
+    ret and ret**2, avoiding the O(n*window) inner-loop ``np.std`` slice.
     """
     n = len(close)
     out = np.full(n, np.nan, dtype=np.float64)
@@ -66,8 +66,14 @@ def _rolling_vol(close: np.ndarray, window: int) -> np.ndarray:
     ret = np.empty(n, dtype=np.float64)
     ret[0] = 0.0
     ret[1:] = np.diff(close) / np.where(close[:-1] > 0, close[:-1], 1.0)
-    for i in range(window, n):
-        out[i] = np.std(ret[i - window + 1: i + 1])
+    cs = np.cumsum(ret)
+    cs2 = np.cumsum(ret * ret)
+    w = float(window)
+    s1 = cs[window:] - cs[:-window]
+    s2 = cs2[window:] - cs2[:-window]
+    var = (s2 - s1 * s1 / w) / w
+    np.maximum(var, 0.0, out=var)
+    out[window:] = np.sqrt(var)
     return out
 
 
@@ -286,7 +292,9 @@ class BacktestEngine:
                     )
 
             strategy.cash = portfolio.cash
-            strategy.portfolio_value = portfolio.mark_to_market(current_prices)
+            mtm = portfolio.mark_to_market(current_prices)
+            strategy.portfolio_value = mtm
+            fills_this_bar = False
 
             if portfolio.is_liquidated:
                 portfolio.record_bar(i, current_date)
@@ -352,13 +360,17 @@ class BacktestEngine:
                             ):
                                 portfolio.apply_fill(fill)
                                 order_mgr.remove_filled([order.order_id])
+                                fills_this_bar = True
                         else:
                             portfolio.apply_fill(fill)
                             order_mgr.remove_filled([order.order_id])
+                            fills_this_bar = True
 
             # 4) End-of-bar portfolio snapshot
             strategy.cash = portfolio.cash
-            strategy.portfolio_value = portfolio.mark_to_market(current_prices)
+            if fills_this_bar:
+                mtm = portfolio.mark_to_market(current_prices)
+            strategy.portfolio_value = mtm
             portfolio.record_bar(i, current_date)
 
         return self._assemble_results(

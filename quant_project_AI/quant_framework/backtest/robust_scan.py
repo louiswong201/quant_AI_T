@@ -34,6 +34,8 @@ Public API:
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,12 +48,18 @@ from .config import BacktestConfig
 from .kernels import (
     DEFAULT_PARAM_GRIDS,
     KERNEL_NAMES,
+    _atr,
     _score,
     config_to_kernel_costs,
     eval_kernel,
     precompute_all_ema,
     precompute_all_ma,
     precompute_all_rsi,
+    precompute_all_rolling_std,
+    precompute_rolling_max,
+    precompute_rolling_min,
+    precompute_rolling_vol,
+    precompute_up_prefix,
     scan_all_kernels,
 )
 
@@ -60,12 +68,17 @@ from .kernels import (
 # =====================================================================
 
 DEFAULT_WF_WINDOWS = [
-    (0.35, 0.45, 0.55),
-    (0.45, 0.55, 0.65),
-    (0.55, 0.65, 0.75),
-    (0.65, 0.75, 0.85),
-    (0.75, 0.85, 0.95),
+    (0.30, 0.40, 0.50),
+    (0.40, 0.50, 0.60),
+    (0.50, 0.60, 0.70),
+    (0.60, 0.70, 0.80),
+    (0.70, 0.80, 0.90),
     (0.80, 0.90, 1.00),
+]
+COMPACT_WF_WINDOWS = [
+    (0.30, 0.45, 0.60),
+    (0.50, 0.65, 0.80),
+    (0.70, 0.85, 1.00),
 ]
 DEFAULT_EMBARGO = 5
 
@@ -208,7 +221,7 @@ def robust_score(ret_pct: float, dd_pct: float, n_trades: int,
 
 
 def stitched_oos_metrics(window_rets, window_dds, window_trades):
-    """Aggregate per-window OOS metrics via additive stitching."""
+    """Aggregate per-window OOS metrics via multiplicative compounding."""
     eq = 1.0; pk = 1.0; mdd = 0.0; nt = 0
     n = min(len(window_rets), len(window_dds), len(window_trades))
     for i in range(n):
@@ -220,8 +233,9 @@ def stitched_oos_metrics(window_rets, window_dds, window_trades):
         if d > 100.0:
             d = 100.0
         seg_start = eq
-        gain = r / 100.0
-        eq = seg_start + gain
+        eq = seg_start * (1.0 + r / 100.0)
+        if eq < 0.001:
+            eq = 0.001
         seg_valley = seg_start * max(0.0, 1.0 - d / 100.0)
         if seg_valley < seg_start and pk > 0:
             dd_intra = (pk - seg_valley) / pk * 100.0
@@ -260,6 +274,20 @@ class RobustScanResult:
 #  Main entry point
 # =====================================================================
 
+def _robustness_one_path(kind, idx, sn, bp, c_oos, o_oos, h_oos, l_oos,
+                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+                         mc_noise_std, bootstrap_block):
+    """Evaluate a single robustness perturbation path (MC / Shuffle / Bootstrap)."""
+    if kind == "mc":
+        cp, op, hp, lp = perturb_ohlc(c_oos, o_oos, h_oos, l_oos, mc_noise_std, 42000 + idx)
+    elif kind == "shuffle":
+        cp, op, hp, lp = shuffle_ohlc(c_oos, o_oos, h_oos, l_oos, 50000 + idx)
+    else:
+        cp, op, hp, lp = block_bootstrap_ohlc(c_oos, o_oos, h_oos, l_oos, bootstrap_block, 60000 + idx)
+    ret, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+    return kind, ret
+
+
 def run_robust_scan(
     symbols: List[str],
     data: Dict[str, Dict[str, np.ndarray]],
@@ -274,6 +302,7 @@ def run_robust_scan(
     n_shuffle_paths: int = 20,
     n_bootstrap_paths: int = 20,
     bootstrap_block: int = 20,
+    n_robustness_threads: Optional[int] = None,
 ) -> RobustScanResult:
     """
     The correct way to search for optimal parameters with anti-overfitting.
@@ -285,9 +314,7 @@ def run_robust_scan(
         symbols: list of symbol keys present in *data*.
         data: {sym: {"c": np.ndarray, "o": ..., "h": ..., "l": ...}}.
         config: BacktestConfig with costs, leverage, stop-loss.
-        param_grids: Custom parameter grids per strategy (passed to scan_all_kernels).
-                     e.g. {"MA": [(5,20),(10,50)], "RSI": [(14,30,70)]}
-                     If None, uses DEFAULT_PARAM_GRIDS for all strategies.
+        param_grids: Custom parameter grids per strategy.
         strategies: subset of KERNEL_NAMES (default: all 18).
         wf_windows: walk-forward train/val/test fraction triples.
         embargo: purge gap in bars between train/val/test.
@@ -296,10 +323,11 @@ def run_robust_scan(
         n_shuffle_paths: OHLC shuffle paths (on OOS only).
         n_bootstrap_paths: block bootstrap paths (on OOS only).
         bootstrap_block: block size for bootstrap.
+        n_robustness_threads: threads for parallel robustness checks.
+                              Default: min(8, cpu_count).
 
     Returns:
-        RobustScanResult with per-symbol, per-strategy results including
-        the best params found, OOS metrics, and all robustness metrics.
+        RobustScanResult with per-symbol, per-strategy results.
     """
     import time
 
@@ -310,6 +338,8 @@ def run_robust_scan(
     sb, ss, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
+
+    rob_workers = n_robustness_threads or min(8, os.cpu_count() or 4)
 
     scan_kwargs: Dict[str, Any] = {}
     if param_grids is not None:
@@ -330,7 +360,7 @@ def run_robust_scan(
         if n < 100:
             continue
 
-        # O3: precompute indicators ONCE on full data, then slice per window
+        # ── Precompute ALL indicators ONCE on full data ──
         grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
         max_period = 200
         for _gv in grids.values():
@@ -339,9 +369,18 @@ def run_robust_scan(
                     if isinstance(_v, (int, np.integer)) and _v > max_period:
                         max_period = int(_v)
         max_period = min(max_period + 1, n - 1)
+
         full_mas = precompute_all_ma(c, max_period)
         full_emas = precompute_all_ema(c, max_period)
         full_rsis = precompute_all_rsi(c, max_period)
+        full_atr10 = _atr(h, l, c, 10)
+        full_atr14 = _atr(h, l, c, 14)
+        full_atr20 = _atr(h, l, c, 20)
+        full_rmax_h = precompute_rolling_max(h, max_period)
+        full_rmin_l = precompute_rolling_min(l, max_period)
+        full_stds = precompute_all_rolling_std(c, max_period)
+        full_vols = precompute_rolling_vol(c, max_period)
+        full_up = precompute_up_prefix(c)
 
         best_params_last: Dict[str, Any] = {sn: None for sn in strat_names}
         wfe_vals: Dict[str, list] = {sn: [] for sn in strat_names}
@@ -368,14 +407,19 @@ def run_robust_scan(
             c_te, o_te = c[va_end:te_end], o[va_end:te_end]
             h_te, l_te = h[va_end:te_end], l[va_end:te_end]
 
-            # Slice precomputed indicators (NumPy views — zero copy)
-            mas_tr = full_mas[:, :tr_end]
-            emas_tr = full_emas[:, :tr_end]
-            rsis_tr = full_rsis[:, :tr_end]
-
             train_results = scan_all_kernels(
                 c_tr, o_tr, h_tr, l_tr, config,
-                mas=mas_tr, emas=emas_tr, rsis=rsis_tr,
+                mas=full_mas[:, :tr_end],
+                emas=full_emas[:, :tr_end],
+                rsis=full_rsis[:, :tr_end],
+                atr10=full_atr10[:tr_end],
+                atr14=full_atr14[:tr_end],
+                atr20=full_atr20[:tr_end],
+                rmax_h=full_rmax_h[:, :tr_end],
+                rmin_l=full_rmin_l[:, :tr_end],
+                stds=full_stds[:, :tr_end],
+                vols=full_vols[:, :tr_end],
+                up_prefix=full_up[:tr_end],
                 **scan_kwargs,
             )
 
@@ -385,10 +429,8 @@ def run_robust_scan(
                 res = train_results[sn]
                 total_combos += res["cnt"]
 
-                # Layer 4: Validation gate
                 va_r, va_d, va_nt = eval_kernel(sn, res["params"], c_va, o_va, h_va, l_va,
                                                 sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-                # Layer 1 cont: Test (true OOS)
                 te_r, te_d, te_nt = eval_kernel(sn, res["params"], c_te, o_te, h_te, l_te,
                                                 sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
 
@@ -407,64 +449,94 @@ def run_robust_scan(
         # --- Assemble per-strategy metrics ---
         sym_results: Dict[str, Any] = {}
 
-        # Identify the OOS portion = data after the earliest test start
-        # across all windows (conservatively use the last window's test region)
         last_te_start = int(n * windows[-1][1])
         c_oos = c[last_te_start:]
         o_oos = o[last_te_start:]
         h_oos = h[last_te_start:]
         l_oos = l[last_te_start:]
 
+        oos_total_bars = sum(
+            int(n * te) - int(n * va) for _tr, va, te in windows
+        )
+
+        # Pre-compute WF scores to enable early pruning of robustness checks
+        wf_scores: Dict[str, float] = {}
         for sn in strat_names:
             if not oos_ret_vals[sn]:
                 continue
             r, d, nt = stitched_oos_metrics(oos_ret_vals[sn], oos_dd_vals[sn], oos_nt_vals[sn])
             bpy = costs.get("bars_per_year", 252.0)
-            sc, ann_r, shrp, dsr_p = robust_score(r, d, nt, n, bars_per_year=bpy)
-
-            bp = best_params_last[sn]
-
-            # --- Layer 6: Monte Carlo (on OOS data only) ---
-            mc_rets = []
-            if bp is not None and n_mc_paths > 0 and len(c_oos) > 30:
-                for mi in range(n_mc_paths):
-                    cp, op, hp, lp = perturb_ohlc(c_oos, o_oos, h_oos, l_oos, mc_noise_std, 42000 + mi)
-                    mr, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-                    mc_rets.append(mr)
-
-            # --- Layer 7: OHLC Shuffle (on OOS data only) ---
-            shuf_rets = []
-            if bp is not None and n_shuffle_paths > 0 and len(c_oos) > 30:
-                for si in range(n_shuffle_paths):
-                    cp, op, hp, lp = shuffle_ohlc(c_oos, o_oos, h_oos, l_oos, 50000 + si)
-                    sr, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-                    shuf_rets.append(sr)
-
-            # --- Layer 8: Block Bootstrap (on OOS data only) ---
-            boot_rets = []
-            if bp is not None and n_bootstrap_paths > 0 and len(c_oos) > 30:
-                for bi in range(n_bootstrap_paths):
-                    cp, op, hp, lp = block_bootstrap_ohlc(c_oos, o_oos, h_oos, l_oos, bootstrap_block, 60000 + bi)
-                    br_, _, _ = eval_kernel(sn, bp, cp, op, hp, lp, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-                    boot_rets.append(br_)
-
+            sc, ann_r, shrp, dsr_p = robust_score(r, d, nt, oos_total_bars, bars_per_year=bpy)
+            wf_scores[sn] = sc
             sym_results[sn] = {
-                "params": bp,
+                "params": best_params_last[sn],
                 "wfe_mean": float(np.mean(wfe_vals[sn])) if wfe_vals[sn] else 0.0,
                 "gen_gap_mean": float(np.mean(gap_vals[sn])) if gap_vals[sn] else 0.0,
-                "oos_ret": r,
-                "oos_dd": d,
-                "oos_trades": nt,
-                "ann_ret": ann_r,
-                "sharpe": shrp,
-                "dsr_p": dsr_p,
-                "wf_score": sc,
-                "mc_mean": float(np.mean(mc_rets)) if mc_rets else 0.0,
-                "mc_std": float(np.std(mc_rets)) if mc_rets else 0.0,
-                "mc_pct_positive": sum(1 for x in mc_rets if x > 0) / max(1, len(mc_rets)),
-                "shuffle_mean": float(np.mean(shuf_rets)) if shuf_rets else 0.0,
-                "bootstrap_mean": float(np.mean(boot_rets)) if boot_rets else 0.0,
+                "oos_ret": r, "oos_dd": d, "oos_trades": nt,
+                "ann_ret": ann_r, "sharpe": shrp, "dsr_p": dsr_p, "wf_score": sc,
+                "mc_mean": 0.0, "mc_std": 0.0, "mc_pct_positive": 0.0,
+                "shuffle_mean": 0.0, "bootstrap_mean": 0.0,
             }
+
+        # Early pruning: only run robustness on top-half strategies
+        if wf_scores:
+            score_threshold = np.median(list(wf_scores.values()))
+        else:
+            score_threshold = -1e18
+
+        # --- Layers 6-8: parallel robustness (MC/Shuffle/Bootstrap) ---
+        rob_tasks = []
+        rob_strats = []
+        for sn in strat_names:
+            bp = best_params_last.get(sn)
+            if bp is None or len(c_oos) <= 30:
+                continue
+            if wf_scores.get(sn, -1e18) < score_threshold:
+                continue
+            rob_strats.append(sn)
+            for mi in range(n_mc_paths):
+                rob_tasks.append(("mc", mi, sn, bp))
+            for si in range(n_shuffle_paths):
+                rob_tasks.append(("shuffle", si, sn, bp))
+            for bi in range(n_bootstrap_paths):
+                rob_tasks.append(("bootstrap", bi, sn, bp))
+
+        if rob_tasks:
+            mc_all: Dict[str, list] = {sn: [] for sn in rob_strats}
+            shuf_all: Dict[str, list] = {sn: [] for sn in rob_strats}
+            boot_all: Dict[str, list] = {sn: [] for sn in rob_strats}
+
+            with ThreadPoolExecutor(max_workers=rob_workers) as pool:
+                futures = {}
+                for kind, idx, sn, bp in rob_tasks:
+                    fut = pool.submit(
+                        _robustness_one_path, kind, idx, sn, bp,
+                        c_oos, o_oos, h_oos, l_oos,
+                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+                        mc_noise_std, bootstrap_block,
+                    )
+                    futures[fut] = sn
+                for fut in as_completed(futures):
+                    sn = futures[fut]
+                    kind, ret = fut.result()
+                    if kind == "mc":
+                        mc_all[sn].append(ret)
+                    elif kind == "shuffle":
+                        shuf_all[sn].append(ret)
+                    else:
+                        boot_all[sn].append(ret)
+
+            for sn in rob_strats:
+                if sn not in sym_results:
+                    continue
+                mc = mc_all[sn]
+                shuf = shuf_all[sn]
+                boot = boot_all[sn]
+                sym_results[sn]["mc_mean"] = float(np.mean(mc)) if mc else 0.0
+                sym_results[sn]["mc_std"] = float(np.std(mc)) if mc else 0.0
+                sym_results[sn]["mc_pct_positive"] = sum(1 for x in mc if x > 0) / max(1, len(mc))
+                sym_results[sn]["shuffle_mean"] = float(np.mean(shuf)) if shuf else 0.0
+                sym_results[sn]["bootstrap_mean"] = float(np.mean(boot)) if boot else 0.0
 
         result.per_symbol[sym] = sym_results
 
@@ -559,15 +631,13 @@ def run_cpcv_scan(
     embargo: int = DEFAULT_EMBARGO,
     n_mc_paths: int = 10,
     mc_noise_std: float = 0.002,
+    n_robustness_threads: Optional[int] = None,
 ) -> CPCVResult:
     """Combinatorial Purged Cross-Validation scan.
 
     Uses *all* data in both train and test roles across C(n_groups,
-    n_test_groups) splits.  For each split the best parameters are
-    found on the training folds and evaluated on the held-out test
-    folds.  Per-strategy OOS returns are averaged over all splits,
-    giving a far more reliable performance estimate than a single
-    walk-forward pass.
+    n_test_groups) splits.  Per-strategy OOS returns are averaged over
+    all splits, giving a far more reliable performance estimate.
 
     Args:
         symbols:        Symbol keys present in *data*.
@@ -580,10 +650,10 @@ def run_cpcv_scan(
         embargo:        Purge gap between train/test boundaries.
         n_mc_paths:     MC paths on OOS per split (lightweight sanity check).
         mc_noise_std:   Noise std for MC perturbation.
+        n_robustness_threads: threads for parallel MC checks.
 
     Returns:
-        CPCVResult with per-strategy averaged OOS metrics, DSR,
-        and the proportion of splits with positive OOS return.
+        CPCVResult with per-strategy averaged OOS metrics.
     """
     import time
 
@@ -592,6 +662,8 @@ def run_cpcv_scan(
     sb, ss, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
+
+    rob_workers = n_robustness_threads or min(8, os.cpu_count() or 4)
 
     scan_kwargs: Dict[str, Any] = {}
     if param_grids is not None:
@@ -619,7 +691,7 @@ def run_cpcv_scan(
         oos_dds: Dict[str, List[float]] = {sn: [] for sn in strat_names}
         oos_nts: Dict[str, List[int]] = {sn: [] for sn in strat_names}
         best_params_all: Dict[str, Any] = {sn: None for sn in strat_names}
-        mc_rets_all: Dict[str, List[float]] = {sn: [] for sn in strat_names}
+        mc_tasks_deferred: List[Tuple[str, Any, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]] = []
 
         for si, (train_ranges, test_ranges) in enumerate(splits):
             c_tr = _concat_ranges(c, train_ranges)
@@ -630,8 +702,6 @@ def run_cpcv_scan(
             if len(c_tr) < 60:
                 continue
 
-            # CPCV concatenates non-contiguous ranges, so precomputed
-            # indicators on full data cannot be sliced — compute per split
             train_results = scan_all_kernels(
                 c_tr, o_tr, h_tr, l_tr, config, **scan_kwargs,
             )
@@ -663,16 +733,25 @@ def run_cpcv_scan(
                 oos_nts[sn].append(te_nt)
 
                 if n_mc_paths > 0:
+                    mc_tasks_deferred.append((sn, bp, c_te, o_te, h_te, l_te, si))
+
+        # --- Batch MC checks across all splits with ThreadPoolExecutor ---
+        mc_rets_all: Dict[str, List[float]] = {sn: [] for sn in strat_names}
+        if mc_tasks_deferred:
+            with ThreadPoolExecutor(max_workers=rob_workers) as pool:
+                futures = []
+                for sn, bp, c_te, o_te, h_te, l_te, si in mc_tasks_deferred:
                     for mi in range(n_mc_paths):
-                        cp, op, hp, lp = perturb_ohlc(
-                            c_te, o_te, h_te, l_te, mc_noise_std,
-                            70000 + si * 1000 + mi,
-                        )
-                        mr, _, _ = eval_kernel(
-                            sn, bp, cp, op, hp, lp,
+                        fut = pool.submit(
+                            _robustness_one_path, "mc", si * 1000 + mi, sn, bp,
+                            c_te, o_te, h_te, l_te,
                             sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+                            mc_noise_std, 20,
                         )
-                        mc_rets_all[sn].append(mr)
+                        futures.append((fut, sn))
+                for fut, sn in futures:
+                    _, ret = fut.result()
+                    mc_rets_all[sn].append(ret)
 
         sym_results: Dict[str, Any] = {}
         for sn in strat_names:

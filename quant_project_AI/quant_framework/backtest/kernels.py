@@ -2391,8 +2391,10 @@ def config_to_kernel_costs(config: BacktestConfig) -> Dict[str, float]:
     if config.funding_leverage_scaling and lev > 1.0:
         dc *= lev * (1.0 + 0.02 * lev)
     bpy = getattr(config, "bars_per_year", 252.0)
-    borrow_per_bar = config.short_borrow_rate_annual / bpy
-    dc += borrow_per_bar
+    # NOTE: borrow cost excluded from dc — it should only apply to short
+    # positions, but dc is charged uniformly to all positions in _fx_lev.
+    # Keeping borrow out prevents long positions from being penalised.
+    # TODO: implement direction-specific per-bar costs (dc_long / dc_short).
 
     sl = config.stop_loss_pct if config.stop_loss_pct else 0.80
     pfrac = config.position_fraction
@@ -3009,6 +3011,14 @@ def scan_all_kernels(
     emas: Optional[np.ndarray] = None,
     rsis: Optional[np.ndarray] = None,
     n_threads: Optional[int] = None,
+    atr10: Optional[np.ndarray] = None,
+    atr14: Optional[np.ndarray] = None,
+    atr20: Optional[np.ndarray] = None,
+    rmax_h: Optional[np.ndarray] = None,
+    rmin_l: Optional[np.ndarray] = None,
+    stds: Optional[np.ndarray] = None,
+    vols: Optional[np.ndarray] = None,
+    up_prefix: Optional[np.ndarray] = None,
 ) -> Dict[str, dict]:
     """Scan strategies over parameter grids with thread-parallel execution.
 
@@ -3021,8 +3031,13 @@ def scan_all_kernels(
         param_grids: Custom parameter grids per strategy.
         strategies: Which strategies to scan. If None, scans all 18.
         mas, emas, rsis: Pre-computed indicator arrays (optional).
-        n_threads: Number of parallel threads. Default: min(strategies, cpu_count).
-                   Set to 1 for sequential execution.
+        n_threads: Number of parallel threads.  Set to 1 for sequential
+                   (default — avoids nested-parallelism with inner prange).
+        atr10, atr14, atr20: Pre-computed ATR arrays (optional).
+        rmax_h, rmin_l: Pre-computed rolling max/min arrays (optional).
+        stds: Pre-computed rolling std arrays (optional).
+        vols: Pre-computed rolling vol arrays (optional).
+        up_prefix: Pre-computed up-prefix array for Drift (optional).
 
     Returns:
         Dict mapping strategy name -> {params, score, ret, dd, nt, cnt}.
@@ -3066,34 +3081,19 @@ def scan_all_kernels(
     rmax_h = rmin_l = None
     stds = vols = up_prefix = None
 
-    if use_threads:
-        _pool = ThreadPoolExecutor(max_workers=n_workers)
-        _pre = {}
-        if need_atr:
-            _pre['a10'] = _pool.submit(_atr, h, l, c, 10)
-            _pre['a14'] = _pool.submit(_atr, h, l, c, 14)
-            _pre['a20'] = _pool.submit(_atr, h, l, c, 20)
-        if need_rmax:
-            _pre['rmx'] = _pool.submit(precompute_rolling_max, h, max_period)
-            _pre['rmn'] = _pool.submit(precompute_rolling_min, l, max_period)
-        if need_stds: _pre['stds'] = _pool.submit(precompute_all_rolling_std, c, max_period)
-        if need_vols: _pre['vols'] = _pool.submit(precompute_rolling_vol, c, max_period)
-        if need_up: _pre['up'] = _pool.submit(precompute_up_prefix, c)
-        if need_atr:
-            atr10 = _pre['a10'].result(); atr14 = _pre['a14'].result(); atr20 = _pre['a20'].result()
-        if need_rmax:
-            rmax_h = _pre['rmx'].result(); rmin_l = _pre['rmn'].result()
-        if need_stds: stds = _pre['stds'].result()
-        if need_vols: vols = _pre['vols'].result()
-        if need_up: up_prefix = _pre['up'].result()
-    else:
-        if need_atr:
-            atr10 = _atr(h, l, c, 10); atr14 = _atr(h, l, c, 14); atr20 = _atr(h, l, c, 20)
-        if need_rmax:
-            rmax_h = precompute_rolling_max(h, max_period); rmin_l = precompute_rolling_min(l, max_period)
-        if need_stds: stds = precompute_all_rolling_std(c, max_period)
-        if need_vols: vols = precompute_rolling_vol(c, max_period)
-        if need_up: up_prefix = precompute_up_prefix(c)
+    if need_atr:
+        if atr10 is None: atr10 = _atr(h, l, c, 10)
+        if atr14 is None: atr14 = _atr(h, l, c, 14)
+        if atr20 is None: atr20 = _atr(h, l, c, 20)
+    if need_rmax:
+        if rmax_h is None: rmax_h = precompute_rolling_max(h, max_period)
+        if rmin_l is None: rmin_l = precompute_rolling_min(l, max_period)
+    if need_stds and stds is None:
+        stds = precompute_all_rolling_std(c, max_period)
+    if need_vols and vols is None:
+        vols = precompute_rolling_vol(c, max_period)
+    if need_up and up_prefix is None:
+        up_prefix = precompute_up_prefix(c)
 
     # KAMA precomputation: deduplicate (erp, fsc, ssc) tuples
     kama_arrs = kama_idx = None
@@ -3199,6 +3199,7 @@ def scan_all_kernels(
             bp = raw_grid[bi] if bi >= 0 else None
             R[sn] = dict(params=bp, score=bs, ret=br, dd=bd, nt=int(bn), cnt=int(cnt))
     else:
+        _pool = ThreadPoolExecutor(max_workers=n_workers)
         future_to_meta = {}
         for sn, raw_grid, ga in tasks:
             fut = _pool.submit(_run_one, sn, ga)
@@ -3208,8 +3209,6 @@ def scan_all_kernels(
             bi, bs, br, bd, bn, cnt = fut.result()
             bp = raw_grid[bi] if bi >= 0 else None
             R[sn] = dict(params=bp, score=bs, ret=br, dd=bd, nt=int(bn), cnt=int(cnt))
-
-    if use_threads:
         _pool.shutdown(wait=False)
 
     return R
