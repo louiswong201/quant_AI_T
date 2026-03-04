@@ -106,16 +106,12 @@ class APIDataAdapter(BaseDataAdapter):
     def load_data(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """加载数据（同步接口）"""
         try:
-            # 如果已有事件循环，使用它
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # 运行异步函数
-            if loop.is_running():
-                # 如果循环正在运行，使用线程池
+                loop = None
+
+            if loop is not None and loop.is_running():
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
@@ -124,7 +120,7 @@ class APIDataAdapter(BaseDataAdapter):
                     )
                     return future.result()
             else:
-                return loop.run_until_complete(
+                return asyncio.run(
                     self._fetch_data_async(symbol, start_date, end_date)
                 )
         except Exception as e:
@@ -145,11 +141,13 @@ class APIDataAdapter(BaseDataAdapter):
     def check_connection(self) -> bool:
         """检查API连接"""
         try:
-            session = self._get_session()
-            # 尝试发送一个简单的请求
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 如果循环正在运行，使用线程
+            self._get_session()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None and loop.is_running():
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
@@ -158,7 +156,7 @@ class APIDataAdapter(BaseDataAdapter):
                     )
                     return future.result()
             else:
-                return loop.run_until_complete(self._check_connection_async())
+                return asyncio.run(self._check_connection_async())
         except Exception:
             logger.debug("check_connection failed", exc_info=True)
             return False
@@ -175,10 +173,17 @@ class APIDataAdapter(BaseDataAdapter):
     
     def close(self) -> None:
         """关闭会话和连接器"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            return
         if self.session and not self.session.closed:
-            asyncio.get_event_loop().run_until_complete(self.session.close())
+            asyncio.run(self.session.close())
         if self.connector:
-            asyncio.get_event_loop().run_until_complete(self.connector.close())
+            asyncio.run(self.connector.close())
     
     def __del__(self) -> None:
         """析构函数"""
