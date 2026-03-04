@@ -17,9 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from numba import njit
 
-from ..platform_config import check_numba_cache
+from ..platform_config import configure as _configure_platform, check_numba_cache
+_configure_platform()
+
+from numba import njit
 from .config import BacktestConfig
 
 _logger = _logging.getLogger(__name__)

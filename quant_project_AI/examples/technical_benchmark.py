@@ -128,8 +128,11 @@ def get_system_info() -> Dict[str, str]:
     try:
         import numba
         info["numba"] = numba.__version__
-        info["numba_threads"] = os.environ.get("NUMBA_NUM_THREADS", str(numba.config.NUMBA_NUM_THREADS))
-        info["threading_layer"] = os.environ.get("NUMBA_THREADING_LAYER", "default")
+        info["numba_threads"] = str(numba.config.NUMBA_NUM_THREADS)
+        try:
+            info["threading_layer"] = numba.threading_layer()
+        except ValueError:
+            info["threading_layer"] = os.environ.get("NUMBA_THREADING_LAYER", "default")
     except (ImportError, AttributeError):
         info["numba"] = "N/A"
     info["numpy"] = np.__version__
@@ -726,7 +729,7 @@ def generate_report(
     lines.append("### 性能关键技术\n")
     lines.append("| 技术 | 效果 | 说明 |")
     lines.append("|:-----|:-----|:-----|")
-    lines.append("| Numba `@njit(cache=True, fastmath=True)` | 编译为原生机器码 | 消除 Python 解释器开销，首次编译后缓存 |")
+    lines.append("| Numba `@njit(cache=True, fastmath=_SAFE_FASTMATH)` | 编译为原生机器码 | 消除 Python 解释器开销，首次编译后缓存，安全浮点优化 |")
     lines.append("| 预计算指标数组 | 避免重复计算 | MA/EMA/RSI/ATR/KAMA 一次计算，所有参数组合共享 |")
     lines.append("| Lemire O(N) 滚动极值 | 算法级优化 | rolling max/min 从 O(N×W) → O(N) |")
     lines.append("| 信号-填充-PnL 融合循环 | 消除中间分配 | 单个 for 循环完成全部逻辑，无 NumPy 临时数组 |")

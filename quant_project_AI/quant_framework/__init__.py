@@ -16,6 +16,10 @@ Architecture (SOLID-decomposed):
 
 __version__ = "3.0.0"
 
+# Platform-specific Numba configuration MUST run before any numba import.
+from .platform_config import configure as _configure_platform
+_configure_platform()
+
 from .data import DataManager, RagContextProvider
 from .backtest import (
     backtest,

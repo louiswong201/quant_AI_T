@@ -20,6 +20,7 @@ scan_all_kernels(c, o, h, l, config, *, n_threads=...) -> dict[str, dict]
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,6 +31,8 @@ import numpy as np
 from numba import njit, prange
 
 from .config import BacktestConfig
+
+_logger = logging.getLogger(__name__)
 
 # Keep FMA/reassociation/reciprocal but preserve NaN/Inf safety.
 # Excludes 'nnan' and 'ninf' which cause prange deadlocks on Windows
@@ -3041,6 +3044,30 @@ def _grid_to_array(grid: List[tuple]) -> np.ndarray:
 
 
 _GRID_CACHE: Dict[int, np.ndarray] = {}
+_MAX_PERIOD_CACHE: Dict[int, int] = {}
+
+
+def _clear_caches():
+    """Clear module-level caches. Must be called in forked subprocesses
+    to prevent ``id()`` key collisions with the parent's cached objects."""
+    _GRID_CACHE.clear()
+    _MAX_PERIOD_CACHE.clear()
+
+
+def _cached_max_period(grids: Dict[str, List[tuple]], n: int) -> int:
+    """Return max integer parameter across all grids, cached by grid dict identity."""
+    key = id(grids)
+    raw = _MAX_PERIOD_CACHE.get(key)
+    if raw is None:
+        raw = 200
+        for gv in grids.values():
+            for p in gv:
+                for v in p:
+                    if isinstance(v, (int, np.integer)) and v > raw:
+                        raw = int(v)
+        _MAX_PERIOD_CACHE[key] = raw
+    return min(raw + 1, n - 1)
+
 
 def _cached_grid(grid: List[tuple]) -> np.ndarray:
     """Cache numpy conversion of grid by id (works for module-level DEFAULT lists)."""
@@ -3091,7 +3118,6 @@ def scan_all_kernels(
     Returns:
         Dict mapping strategy name -> {params, score, ret, dd, nt, cnt}.
     """
-    validate_ohlc(c, o, h, l)
     costs = config_to_kernel_costs(config)
     sb, ss_, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
@@ -3099,13 +3125,7 @@ def scan_all_kernels(
 
     grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
 
-    max_period = 200
-    for _grid_vals in grids.values():
-        for _p in _grid_vals:
-            for _v in _p:
-                if isinstance(_v, (int, np.integer)) and _v > max_period:
-                    max_period = int(_v)
-    max_period = min(max_period + 1, len(c) - 1)
+    max_period = _cached_max_period(grids, len(c))
 
     if mas is None:
         mas = precompute_all_ma(c, max_period)
@@ -3149,8 +3169,7 @@ def scan_all_kernels(
     if "KAMA" in strat_names:
         raw_kama = grids.get("KAMA")
         if raw_kama:
-            gid_k = id(raw_kama)
-            ck_key = gid_k + 2
+            ck_key = ("KAMA_dedup", id(raw_kama))
             cached_k = _GRID_CACHE.get(ck_key)
             if isinstance(cached_k, tuple):
                 kama_unique, kama_idx = cached_k
@@ -3172,8 +3191,7 @@ def scan_all_kernels(
     if "MACD" in strat_names:
         raw_macd = grids.get("MACD")
         if raw_macd:
-            gid = id(raw_macd)
-            cache_key = gid + 1
+            cache_key = ("MACD_dedup", id(raw_macd))
             cached = _GRID_CACHE.get(cache_key)
             if isinstance(cached, tuple):
                 macd_pairs_arr, macd_pair_idx = cached
@@ -3226,7 +3244,8 @@ def scan_all_kernels(
     def _run_one(sn, ga):
         try:
             return _scan_dispatch.get(sn, lambda _ga: _null_result)(ga)
-        except Exception:
+        except Exception as exc:
+            _logger.warning("Kernel %s scan failed: %s", sn, type(exc).__name__)
             return _null_result
 
     # ── Phase 2: scan strategies (threaded or serial) ──

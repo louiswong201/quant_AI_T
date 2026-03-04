@@ -93,7 +93,12 @@ def check_numba_cache() -> bool:
     Logs a warning when the cache is missing — the first run will need
     to JIT-compile ~96 functions which can take several minutes.
     """
-    cache_dir = Path(__file__).parent / "backtest" / "__pycache__"
+    custom = os.environ.get("NUMBA_CACHE_DIR")
+    if custom:
+        cache_dir = Path(custom)
+    else:
+        cache_dir = Path(__file__).parent / "backtest" / "__pycache__"
+
     if cache_dir.is_dir() and any(cache_dir.glob("kernels.*.nbi")):
         return True
 
