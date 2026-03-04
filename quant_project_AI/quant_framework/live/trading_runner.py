@@ -50,6 +50,7 @@ class TradingRunner:
         strategies: Dict[str, Union[KernelAdapter, MultiTFAdapter]],
         *,
         bt_config: Optional[BacktestConfig] = None,
+        symbol_configs: Optional[Dict[str, BacktestConfig]] = None,
         position_size_pct: float = 0.05,
         equity_snapshot_interval: float = 60.0,
         on_update: Optional[Callable[[], Any]] = None,
@@ -59,6 +60,7 @@ class TradingRunner:
         self._journal = journal
         self._strategies = strategies
         self._bt_config = bt_config
+        self._symbol_configs = symbol_configs or {}
         self._pos_size_pct = position_size_pct
         self._eq_interval = equity_snapshot_interval
         self._on_update = on_update
@@ -245,7 +247,8 @@ class TradingRunner:
         symbol = tick.symbol
         self._live_prices[symbol] = tick.price
 
-        if self._bt_config is None:
+        cfg = self._get_config(symbol)
+        if cfg is None:
             return
 
         positions = self._broker.get_positions()
@@ -261,8 +264,8 @@ class TradingRunner:
         if self._sl_triggered.get(symbol):
             return
 
-        sl_pct = self._bt_config.stop_loss_pct
-        tp_pct = self._bt_config.take_profit_pct
+        sl_pct = cfg.stop_loss_pct
+        tp_pct = cfg.take_profit_pct
         action = None
         trigger_price = tick.price
         reason = ""
@@ -333,12 +336,17 @@ class TradingRunner:
         if isinstance(broker, RiskManagedBroker) and broker._cb is not None:
             broker._cb.record_pnl(pnl)
 
+    def _get_config(self, symbol: str) -> Optional[BacktestConfig]:
+        """Per-symbol config with fallback to the global bt_config."""
+        return self._symbol_configs.get(symbol, self._bt_config)
+
     def _calc_shares(self, sig: Dict[str, Any]) -> float:
         price = float(sig.get("price", 0))
         if price <= 0:
             return 0.0
         cash = self._broker.get_cash()
-        leverage = self._bt_config.leverage if self._bt_config else 1.0
+        cfg = self._get_config(sig.get("symbol", ""))
+        leverage = cfg.leverage if cfg else 1.0
         notional = cash * self._pos_size_pct * leverage
         raw = notional / price
         allow_frac = getattr(self._broker, "_allow_fractional", False)

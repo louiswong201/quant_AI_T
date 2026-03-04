@@ -1,0 +1,1524 @@
+{
+  "generated": "2026-03-04T12:31:04.313237",
+  "total_recommendations": 50,
+  "single_tf_count": 30,
+  "multi_tf_count": 20,
+  "recommendations": [
+    {
+      "rank": 1,
+      "symbol": "PG",
+      "type": "single-TF",
+      "strategy": "RSI",
+      "params": [
+        19,
+        43,
+        70
+      ],
+      "leverage": 5,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 403.73,
+        "max_dd": 79.25,
+        "sharpe": 2.054,
+        "dsr_p": 0.0165,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.05
+      }
+    },
+    {
+      "rank": 2,
+      "symbol": "JPM",
+      "type": "single-TF",
+      "strategy": "Bollinger",
+      "params": [
+        23,
+        2.8
+      ],
+      "leverage": 2,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 250.13,
+        "max_dd": 57.99,
+        "sharpe": 2.053,
+        "dsr_p": 0.0332,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.05
+      }
+    },
+    {
+      "rank": 3,
+      "symbol": "AVAX",
+      "type": "single-TF",
+      "strategy": "Turtle",
+      "params": [
+        70,
+        27,
+        20,
+        1.5
+      ],
+      "leverage": 2,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 52.83,
+        "max_dd": 58.91,
+        "sharpe": 2.05,
+        "dsr_p": 0.0073,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.05
+      }
+    },
+    {
+      "rank": 4,
+      "symbol": "ADA",
+      "type": "single-TF",
+      "strategy": "Donchian",
+      "params": [
+        90,
+        20,
+        3.5
+      ],
+      "leverage": 1,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 29.76,
+        "max_dd": 33.21,
+        "sharpe": 2.048,
+        "dsr_p": 0.005,
+        "mc_pct_positive": 0.967,
+        "wf_score": 2.05
+      }
+    },
+    {
+      "rank": 5,
+      "symbol": "ABBV",
+      "type": "single-TF",
+      "strategy": "Donchian",
+      "params": [
+        55,
+        14,
+        2.0
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 104.19,
+        "max_dd": 45.46,
+        "sharpe": 2.04,
+        "dsr_p": 0.0948,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.04
+      }
+    },
+    {
+      "rank": 6,
+      "symbol": "ABBV",
+      "type": "single-TF",
+      "strategy": "DualMom",
+      "params": [
+        20,
+        200
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 96.31,
+        "max_dd": 42.07,
+        "sharpe": 2.038,
+        "dsr_p": 0.0865,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.04
+      }
+    },
+    {
+      "rank": 7,
+      "symbol": "DOGE",
+      "type": "single-TF",
+      "strategy": "MA",
+      "params": [
+        49,
+        86
+      ],
+      "leverage": 2,
+      "interval": "4h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 54.25,
+        "max_dd": 61.03,
+        "sharpe": 2.031,
+        "dsr_p": 0.0367,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.03
+      }
+    },
+    {
+      "rank": 8,
+      "symbol": "AMZN",
+      "type": "single-TF",
+      "strategy": "VolRegime",
+      "params": [
+        10,
+        0.035,
+        20,
+        80,
+        35,
+        65
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 185.65,
+        "max_dd": 55.91,
+        "sharpe": 1.999,
+        "dsr_p": 0.0002,
+        "mc_pct_positive": 1.0,
+        "wf_score": 2.0
+      }
+    },
+    {
+      "rank": 9,
+      "symbol": "MA_stock",
+      "type": "single-TF",
+      "strategy": "Bollinger",
+      "params": [
+        8,
+        2.0
+      ],
+      "leverage": 1,
+      "interval": "1d",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 83.91,
+        "max_dd": 30.81,
+        "sharpe": 1.978,
+        "dsr_p": 0.0002,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.98
+      }
+    },
+    {
+      "rank": 10,
+      "symbol": "TSLA",
+      "type": "single-TF",
+      "strategy": "Keltner",
+      "params": [
+        60,
+        10,
+        2.0
+      ],
+      "leverage": 5,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 60.12,
+        "max_dd": 58.12,
+        "sharpe": 1.969,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.867,
+        "wf_score": 1.97
+      }
+    },
+    {
+      "rank": 11,
+      "symbol": "JNJ",
+      "type": "single-TF",
+      "strategy": "RAMOM",
+      "params": [
+        90,
+        45,
+        3.5,
+        0.3
+      ],
+      "leverage": 2,
+      "interval": "1h",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 20.32,
+        "max_dd": 20.04,
+        "sharpe": 1.931,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.93
+      }
+    },
+    {
+      "rank": 12,
+      "symbol": "XRP",
+      "type": "single-TF",
+      "strategy": "KAMA",
+      "params": [
+        10,
+        2,
+        20,
+        2.0,
+        14
+      ],
+      "leverage": 3,
+      "interval": "4h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 54.35,
+        "max_dd": 64.54,
+        "sharpe": 1.924,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.92
+      }
+    },
+    {
+      "rank": 13,
+      "symbol": "JPM",
+      "type": "single-TF",
+      "strategy": "VolRegime",
+      "params": [
+        14,
+        0.035,
+        20,
+        100,
+        35,
+        75
+      ],
+      "leverage": 2,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 314.15,
+        "max_dd": 78.33,
+        "sharpe": 1.909,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.91
+      }
+    },
+    {
+      "rank": 14,
+      "symbol": "NVDA",
+      "type": "single-TF",
+      "strategy": "ZScore",
+      "params": [
+        30,
+        2.0,
+        0.5,
+        2.0
+      ],
+      "leverage": 5,
+      "interval": "4h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 67.91,
+        "max_dd": 58.71,
+        "sharpe": 1.901,
+        "dsr_p": 0.0001,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.9
+      }
+    },
+    {
+      "rank": 15,
+      "symbol": "META",
+      "type": "single-TF",
+      "strategy": "RegimeEMA",
+      "params": [
+        10,
+        0.01,
+        10,
+        40,
+        120
+      ],
+      "leverage": 5,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 141.25,
+        "max_dd": 65.11,
+        "sharpe": 1.888,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.89
+      }
+    },
+    {
+      "rank": 16,
+      "symbol": "SOL",
+      "type": "single-TF",
+      "strategy": "Keltner",
+      "params": [
+        30,
+        20,
+        3.5
+      ],
+      "leverage": 2,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 46.47,
+        "max_dd": 56.27,
+        "sharpe": 1.887,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.89
+      }
+    },
+    {
+      "rank": 17,
+      "symbol": "CVX",
+      "type": "single-TF",
+      "strategy": "Drift",
+      "params": [
+        10,
+        0.52,
+        20
+      ],
+      "leverage": 1,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 312.84,
+        "max_dd": 66.93,
+        "sharpe": 1.884,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.867,
+        "wf_score": 1.88
+      }
+    },
+    {
+      "rank": 18,
+      "symbol": "V",
+      "type": "single-TF",
+      "strategy": "VolRegime",
+      "params": [
+        14,
+        0.035,
+        20,
+        40,
+        25,
+        65
+      ],
+      "leverage": 1,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 77.9,
+        "max_dd": 31.54,
+        "sharpe": 1.883,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.88
+      }
+    },
+    {
+      "rank": 19,
+      "symbol": "JNJ",
+      "type": "single-TF",
+      "strategy": "VolRegime",
+      "params": [
+        14,
+        0.02,
+        5,
+        50,
+        35,
+        75
+      ],
+      "leverage": 1,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 171.34,
+        "max_dd": 37.54,
+        "sharpe": 1.84,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.84
+      }
+    },
+    {
+      "rank": 20,
+      "symbol": "XRP",
+      "type": "single-TF",
+      "strategy": "MESA",
+      "params": [
+        0.2,
+        0.03
+      ],
+      "leverage": 1,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 41.5,
+        "max_dd": 51.67,
+        "sharpe": 1.836,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.967,
+        "wf_score": 1.84
+      }
+    },
+    {
+      "rank": 21,
+      "symbol": "DOGE",
+      "type": "single-TF",
+      "strategy": "RAMOM",
+      "params": [
+        45,
+        30,
+        3.5,
+        0.3
+      ],
+      "leverage": 1,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 39.18,
+        "max_dd": 48.95,
+        "sharpe": 1.829,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.83
+      }
+    },
+    {
+      "rank": 22,
+      "symbol": "JPM",
+      "type": "single-TF",
+      "strategy": "Bollinger",
+      "params": [
+        23,
+        3.0
+      ],
+      "leverage": 1,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 143.64,
+        "max_dd": 37.52,
+        "sharpe": 1.822,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.82
+      }
+    },
+    {
+      "rank": 23,
+      "symbol": "AMZN",
+      "type": "single-TF",
+      "strategy": "MA",
+      "params": [
+        97,
+        158
+      ],
+      "leverage": 1,
+      "interval": "1h",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 23.24,
+        "max_dd": 24.37,
+        "sharpe": 1.815,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.82
+      }
+    },
+    {
+      "rank": 24,
+      "symbol": "JPM",
+      "type": "single-TF",
+      "strategy": "Drift",
+      "params": [
+        20,
+        0.5,
+        28
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 298.61,
+        "max_dd": 78.38,
+        "sharpe": 1.814,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.733,
+        "wf_score": 1.81
+      }
+    },
+    {
+      "rank": 25,
+      "symbol": "NVDA",
+      "type": "single-TF",
+      "strategy": "MultiFactor",
+      "params": [
+        5,
+        50,
+        5,
+        0.7,
+        0.3
+      ],
+      "leverage": 2,
+      "interval": "4h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 49.3,
+        "max_dd": 44.91,
+        "sharpe": 1.804,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.967,
+        "wf_score": 1.8
+      }
+    },
+    {
+      "rank": 26,
+      "symbol": "XOM",
+      "type": "single-TF",
+      "strategy": "MA",
+      "params": [
+        25,
+        210
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 339.87,
+        "max_dd": 76.73,
+        "sharpe": 1.786,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.79
+      }
+    },
+    {
+      "rank": 27,
+      "symbol": "JNJ",
+      "type": "single-TF",
+      "strategy": "KAMA",
+      "params": [
+        30,
+        4,
+        20,
+        1.5,
+        10
+      ],
+      "leverage": 1,
+      "interval": "4h",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 15.48,
+        "max_dd": 14.3,
+        "sharpe": 1.78,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.78
+      }
+    },
+    {
+      "rank": 28,
+      "symbol": "JNJ",
+      "type": "single-TF",
+      "strategy": "DualMom",
+      "params": [
+        30,
+        60
+      ],
+      "leverage": 1,
+      "interval": "4h",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 16.76,
+        "max_dd": 15.67,
+        "sharpe": 1.758,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.76
+      }
+    },
+    {
+      "rank": 29,
+      "symbol": "XRP",
+      "type": "single-TF",
+      "strategy": "ZScore",
+      "params": [
+        110,
+        3.0,
+        0.0,
+        2.0
+      ],
+      "leverage": 3,
+      "interval": "1h",
+      "cpcv_validated": false,
+      "backtest_metrics": {
+        "oos_ret": 33.84,
+        "max_dd": 44.21,
+        "sharpe": 1.749,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 0.767,
+        "wf_score": 1.75
+      }
+    },
+    {
+      "rank": 30,
+      "symbol": "ETH",
+      "type": "single-TF",
+      "strategy": "RegimeEMA",
+      "params": [
+        10,
+        0.025,
+        15,
+        80,
+        150
+      ],
+      "leverage": 3,
+      "interval": "1d",
+      "cpcv_validated": true,
+      "backtest_metrics": {
+        "oos_ret": 107.03,
+        "max_dd": 68.48,
+        "sharpe": 1.748,
+        "dsr_p": 0.0,
+        "mc_pct_positive": 1.0,
+        "wf_score": 1.75
+      }
+    },
+    {
+      "rank": 31,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MomBreak",
+          "params": [
+            150,
+            0.05,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            11,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2449.02,
+        "max_dd": 13.82,
+        "sharpe": 4.157,
+        "sortino": 4.998,
+        "n_trades": 400
+      }
+    },
+    {
+      "rank": 32,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MomBreak",
+          "params": [
+            150,
+            0.05,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "ZScore",
+          "params": [
+            10,
+            1.0,
+            0.0,
+            2.0
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2427.23,
+        "max_dd": 14.75,
+        "sharpe": 4.175,
+        "sortino": 4.866,
+        "n_trades": 392
+      }
+    },
+    {
+      "rank": 33,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Keltner",
+          "params": [
+            15,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            11,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1966.76,
+        "max_dd": 13.92,
+        "sharpe": 4.095,
+        "sortino": 4.414,
+        "n_trades": 319
+      }
+    },
+    {
+      "rank": 34,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Keltner",
+          "params": [
+            15,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "ZScore",
+          "params": [
+            10,
+            1.0,
+            0.0,
+            2.0
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1922.84,
+        "max_dd": 13.92,
+        "sharpe": 4.081,
+        "sortino": 4.195,
+        "n_trades": 300
+      }
+    },
+    {
+      "rank": 35,
+      "symbol": "DOGE",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MA",
+          "params": [
+            17,
+            22
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            15,
+            0.5,
+            26
+          ]
+        },
+        "1d": {
+          "strategy": "Drift",
+          "params": [
+            80,
+            0.5,
+            2
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2385.78,
+        "max_dd": 26.54,
+        "sharpe": 3.287,
+        "sortino": 3.716,
+        "n_trades": 705
+      }
+    },
+    {
+      "rank": 36,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "RSI",
+          "params": [
+            43,
+            31,
+            64
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            11,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1929.93,
+        "max_dd": 13.92,
+        "sharpe": 3.944,
+        "sortino": 4.16,
+        "n_trades": 289
+      }
+    },
+    {
+      "rank": 37,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "VolRegime",
+          "params": [
+            14,
+            0.018,
+            15,
+            25,
+            35,
+            80
+          ]
+        },
+        "4h": {
+          "strategy": "ZScore",
+          "params": [
+            60,
+            2.0,
+            0.5,
+            2.0
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            5,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2003.32,
+        "max_dd": 20.43,
+        "sharpe": 3.784,
+        "sortino": 3.22,
+        "n_trades": 266
+      }
+    },
+    {
+      "rank": 38,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MomBreak",
+          "params": [
+            150,
+            0.05,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "RSI",
+          "params": [
+            16,
+            34,
+            64
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            11,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1818.02,
+        "max_dd": 16.77,
+        "sharpe": 4.092,
+        "sortino": 3.858,
+        "n_trades": 266
+      }
+    },
+    {
+      "rank": 39,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "RSI",
+          "params": [
+            43,
+            31,
+            64
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "MACD",
+          "params": [
+            3,
+            11,
+            3
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1857.99,
+        "max_dd": 17.86,
+        "sharpe": 3.978,
+        "sortino": 3.553,
+        "n_trades": 252
+      }
+    },
+    {
+      "rank": 40,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Turtle",
+          "params": [
+            70,
+            31,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "ZScore",
+          "params": [
+            60,
+            2.0,
+            0.5,
+            2.0
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            5,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1818.1,
+        "max_dd": 20.26,
+        "sharpe": 3.953,
+        "sortino": 3.07,
+        "n_trades": 191
+      }
+    },
+    {
+      "rank": 41,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Drift",
+          "params": [
+            5,
+            0.5,
+            22
+          ]
+        },
+        "4h": {
+          "strategy": "MACD",
+          "params": [
+            9,
+            13,
+            12
+          ]
+        },
+        "1d": {
+          "strategy": "Bollinger",
+          "params": [
+            5,
+            0.5
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2402.33,
+        "max_dd": 37.58,
+        "sharpe": 3.015,
+        "sortino": 3.592,
+        "n_trades": 648
+      }
+    },
+    {
+      "rank": 42,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "RSI",
+          "params": [
+            43,
+            31,
+            64
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            16
+          ]
+        },
+        "1d": {
+          "strategy": "ZScore",
+          "params": [
+            10,
+            1.0,
+            0.0,
+            2.0
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1861.78,
+        "max_dd": 15.11,
+        "sharpe": 3.776,
+        "sortino": 3.743,
+        "n_trades": 268
+      }
+    },
+    {
+      "rank": 43,
+      "symbol": "DOT",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MomBreak",
+          "params": [
+            150,
+            0.05,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "RSI",
+          "params": [
+            16,
+            34,
+            64
+          ]
+        },
+        "1d": {
+          "strategy": "ZScore",
+          "params": [
+            10,
+            1.0,
+            0.0,
+            2.0
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1787.42,
+        "max_dd": 18.1,
+        "sharpe": 3.916,
+        "sortino": 3.527,
+        "n_trades": 242
+      }
+    },
+    {
+      "rank": 44,
+      "symbol": "ADA",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "VolRegime",
+          "params": [
+            10,
+            0.018,
+            15,
+            100,
+            35,
+            65
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            15,
+            0.5,
+            26
+          ]
+        },
+        "1d": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            2
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1931.42,
+        "max_dd": 20.99,
+        "sharpe": 3.614,
+        "sortino": 4.119,
+        "n_trades": 323
+      }
+    },
+    {
+      "rank": 45,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Drift",
+          "params": [
+            5,
+            0.5,
+            22
+          ]
+        },
+        "4h": {
+          "strategy": "MACD",
+          "params": [
+            9,
+            13,
+            12
+          ]
+        },
+        "1d": {
+          "strategy": "RSI",
+          "params": [
+            4,
+            28,
+            55
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2379.64,
+        "max_dd": 37.58,
+        "sharpe": 2.946,
+        "sortino": 3.348,
+        "n_trades": 626
+      }
+    },
+    {
+      "rank": 46,
+      "symbol": "DOGE",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MACD",
+          "params": [
+            35,
+            47,
+            30
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            15,
+            0.5,
+            26
+          ]
+        },
+        "1d": {
+          "strategy": "Drift",
+          "params": [
+            80,
+            0.5,
+            2
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2366.49,
+        "max_dd": 36.68,
+        "sharpe": 2.91,
+        "sortino": 3.191,
+        "n_trades": 450
+      }
+    },
+    {
+      "rank": 47,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "VolRegime",
+          "params": [
+            14,
+            0.018,
+            15,
+            25,
+            35,
+            80
+          ]
+        },
+        "4h": {
+          "strategy": "ZScore",
+          "params": [
+            60,
+            2.0,
+            0.5,
+            2.0
+          ]
+        },
+        "1d": {
+          "strategy": "RSI",
+          "params": [
+            4,
+            28,
+            55
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1868.28,
+        "max_dd": 20.37,
+        "sharpe": 3.614,
+        "sortino": 2.916,
+        "n_trades": 227
+      }
+    },
+    {
+      "rank": 48,
+      "symbol": "DOGE",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "MACD",
+          "params": [
+            41,
+            65,
+            24
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            15,
+            0.5,
+            26
+          ]
+        },
+        "1d": {
+          "strategy": "Drift",
+          "params": [
+            80,
+            0.5,
+            2
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 2213.41,
+        "max_dd": 32.43,
+        "sharpe": 3.056,
+        "sortino": 3.353,
+        "n_trades": 399
+      }
+    },
+    {
+      "rank": 49,
+      "symbol": "AVAX",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "Turtle",
+          "params": [
+            70,
+            31,
+            20,
+            3.5
+          ]
+        },
+        "4h": {
+          "strategy": "ZScore",
+          "params": [
+            60,
+            2.0,
+            0.5,
+            2.0
+          ]
+        },
+        "1d": {
+          "strategy": "RSI",
+          "params": [
+            4,
+            28,
+            55
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1796.54,
+        "max_dd": 21.9,
+        "sharpe": 3.619,
+        "sortino": 2.772,
+        "n_trades": 178
+      }
+    },
+    {
+      "rank": 50,
+      "symbol": "ADA",
+      "type": "multi-TF",
+      "mode": "consensus",
+      "tf_combo": "1h+4h+1d",
+      "tf_configs": {
+        "1h": {
+          "strategy": "VolRegime",
+          "params": [
+            10,
+            0.018,
+            15,
+            100,
+            35,
+            65
+          ]
+        },
+        "4h": {
+          "strategy": "Drift",
+          "params": [
+            15,
+            0.5,
+            24
+          ]
+        },
+        "1d": {
+          "strategy": "Drift",
+          "params": [
+            55,
+            0.5,
+            2
+          ]
+        }
+      },
+      "leverage": 5,
+      "backtest_metrics": {
+        "ret_pct": 1840.87,
+        "max_dd": 17.24,
+        "sharpe": 3.524,
+        "sortino": 4.079,
+        "n_trades": 341
+      }
+    }
+  ]
+}
