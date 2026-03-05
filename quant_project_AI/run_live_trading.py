@@ -225,6 +225,14 @@ def parse_args() -> argparse.Namespace:
         "--max-daily-loss", type=float, default=0.05,
         help="Circuit breaker: max daily loss fraction (0.05 = 5%%)",
     )
+    p.add_argument(
+        "--use-portfolio-weights", action="store_true",
+        help="Load position sizes from Portfolio Engine (research.db)",
+    )
+    p.add_argument(
+        "--research-db", type=str, default="research.db",
+        help="Path to research.db for Portfolio Engine weights",
+    )
     return p.parse_args()
 
 
@@ -253,6 +261,23 @@ def main() -> None:
     if not best:
         logger.error("No recommendations matched the given filters")
         sys.exit(1)
+
+    # ── Load portfolio weights from research.db if requested ──
+    portfolio_weights: Dict[str, float] = {}
+    if args.use_portfolio_weights:
+        try:
+            from quant_framework.research import ResearchDB, run_portfolio_analysis
+            rdb = ResearchDB(args.research_db)
+            pa = run_portfolio_analysis(rdb, lookback_days=90)
+            rdb.close()
+            raw_weights = pa.get("position_sizes", {})
+            for key, pct in raw_weights.items():
+                sym_part = key.split("/")[0]
+                portfolio_weights[sym_part] = pct
+            if portfolio_weights:
+                logger.info("Portfolio weights loaded for %d strategies", len(portfolio_weights))
+        except Exception as exc:
+            logger.warning("Could not load portfolio weights: %s", exc)
 
     # ── Build adapters + feed ──
     strategies: Dict[str, Union[KernelAdapter, MultiTFAdapter]] = {}
@@ -331,6 +356,18 @@ def main() -> None:
     first_fsym = next(iter(strategies))
     default_cfg = symbol_configs.get(first_fsym, broker_cfg)
 
+    # Override position_size_pct with portfolio weights if available
+    pos_size = args.position_size
+    if portfolio_weights:
+        first_config_sym = next(iter(best))
+        pw = portfolio_weights.get(first_config_sym, args.position_size)
+        if pw > 0:
+            pos_size = pw
+        logger.info(
+            "Using portfolio-weighted position sizes (base=%.2f%%, per-symbol overrides available)",
+            pos_size * 100,
+        )
+
     runner = TradingRunner(
         feed=feed,
         broker=broker,
@@ -338,7 +375,7 @@ def main() -> None:
         strategies=strategies,
         bt_config=default_cfg,
         symbol_configs=symbol_configs,
-        position_size_pct=args.position_size,
+        position_size_pct=pos_size,
     )
 
     # ── Dashboard ──
