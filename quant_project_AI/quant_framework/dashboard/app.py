@@ -36,18 +36,18 @@ from .charts import (
     build_trade_log_table,
 )
 
-_BG = "#08090e"
-_CARD = "#0f1117"
-_SURFACE = "#161b26"
-_BORDER = "#1e2433"
-_TEXT = "#f8fafc"
-_MUTED = "#94a3b8"
-_GREEN = "#10b981"
-_RED = "#ef4444"
-_BLUE = "#3b82f6"
-_AMBER = "#f59e0b"
-_PURPLE = "#8b5cf6"
-_CYAN = "#06b6d4"
+_BG = "#060912"
+_CARD = "#0c1220"
+_SURFACE = "#121a2b"
+_BORDER = "#243041"
+_TEXT = "#f8fbff"
+_MUTED = "#91a3bb"
+_GREEN = "#22c55e"
+_RED = "#f87171"
+_BLUE = "#4f8cff"
+_AMBER = "#fbbf24"
+_PURPLE = "#9b8afb"
+_CYAN = "#22d3ee"
 
 _FONT = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
 _HEAD_SCRIPTS = [
@@ -56,7 +56,10 @@ _HEAD_SCRIPTS = [
 
 _CUSTOM_CSS = f"""
 body {{
-    background-color: {_BG} !important;
+    background:
+        radial-gradient(circle at top left, rgba(79, 140, 255, 0.16), transparent 24%),
+        radial-gradient(circle at top right, rgba(34, 211, 238, 0.10), transparent 20%),
+        linear-gradient(180deg, #070b14 0%, {_BG} 38%, #04070d 100%) !important;
     font-family: {_FONT} !important;
     color: {_TEXT};
     margin: 0;
@@ -64,28 +67,266 @@ body {{
     -moz-osx-font-smoothing: grayscale;
 }}
 
-/* Shell Card */
-.shell-card {{
-    background: {_CARD};
-    border: 1px solid {_BORDER};
-    border-radius: 12px;
-    padding: 12px 16px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+.app-shell {{
+    max-width: 1700px;
+    margin: 0 auto;
+    padding: 18px 24px 28px;
 }}
 
-/* Metric Cards */
-.metric-card {{
-    background: linear-gradient(135deg, {_CARD} 0%, {_SURFACE} 100%);
-    border: 1px solid {_BORDER};
-    border-radius: 12px;
+.topbar {{
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}}
+
+.brand-panel {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 360px;
     padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(12, 18, 32, 0.96) 0%, rgba(18, 26, 43, 0.92) 100%);
+    border: 1px solid rgba(79, 140, 255, 0.18);
+    border-radius: 16px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+}}
+
+.brand-lockup {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}}
+
+.brand-mark {{
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, {_BLUE}, {_CYAN});
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 800;
+    color: #ffffff;
+    box-shadow: 0 10px 28px rgba(79, 140, 255, 0.34);
+}}
+
+.brand-copy {{
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}}
+
+.brand-eyebrow {{
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: {_CYAN};
+}}
+
+.brand-title {{
+    margin: 0;
+    font-size: 1.12rem;
+    font-weight: 700;
+    color: {_TEXT};
+    letter-spacing: 0.85px;
+}}
+
+.brand-subtitle {{
+    font-size: 0.76rem;
+    color: {_MUTED};
+    font-weight: 500;
+}}
+
+.topbar-actions {{
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}}
+
+.topbar-panel {{
+    min-width: 180px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid {_BORDER};
+    background: linear-gradient(180deg, rgba(12, 18, 32, 0.92), rgba(10, 15, 27, 0.98));
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}}
+
+.topbar-panel.danger {{
+    min-width: 260px;
+    border-color: rgba(248, 113, 113, 0.34);
+    background: linear-gradient(180deg, rgba(36, 14, 20, 0.95), rgba(18, 9, 15, 0.98));
+}}
+
+.topbar-label {{
+    margin-bottom: 8px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.1px;
+    color: {_MUTED};
+}}
+
+.kill-switch-btn {{
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid rgba(248, 113, 113, 0.5);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(248, 113, 113, 0.18), rgba(120, 22, 33, 0.88));
+    color: {_TEXT};
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    box-shadow: 0 10px 24px rgba(120, 22, 33, 0.28);
+}}
+
+.kill-switch-btn:hover {{
+    transform: translateY(-1px);
+    border-color: {_RED};
+    box-shadow: 0 14px 30px rgba(248, 113, 113, 0.18);
+}}
+
+.kill-switch-btn:disabled {{
+    cursor: not-allowed;
+    opacity: 0.72;
+    transform: none;
+}}
+
+.kill-switch-status {{
+    margin-top: 8px;
+    font-size: 0.73rem;
+    line-height: 1.45;
+    color: {_MUTED};
+}}
+
+.shell-card {{
+    background: linear-gradient(180deg, rgba(12, 18, 32, 0.96) 0%, rgba(10, 15, 27, 0.98) 100%);
+    border: 1px solid {_BORDER};
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+}}
+
+.toolbar-card {{
+    margin-bottom: 14px;
+}}
+
+.toolbar-grid {{
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 12px;
+    align-items: end;
+}}
+
+.toolbar-field {{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}}
+
+.toolbar-field.compact {{
+    grid-column: span 2;
+}}
+
+.toolbar-field.standard {{
+    grid-column: span 3;
+}}
+
+.toolbar-field.wide {{
+    grid-column: span 4;
+}}
+
+.toolbar-field.fill {{
+    grid-column: span 3;
+}}
+
+.toolbar-label {{
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.1px;
+    color: {_MUTED};
+}}
+
+.toolbar-hint {{
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: 46px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid {_BORDER};
+    background: rgba(18, 26, 43, 0.72);
+    color: {_MUTED};
+    font-size: 0.76rem;
+    font-weight: 600;
+    white-space: nowrap;
+}}
+
+.config-bar {{
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}}
+
+.section-grid {{
+    display: grid;
+    gap: 12px;
+    margin-bottom: 12px;
+}}
+
+.section-grid.main {{
+    grid-template-columns: 2fr 1.25fr;
+}}
+
+.section-grid.market {{
+    grid-template-columns: 3fr 2fr;
+}}
+
+.section-grid.triple {{
+    grid-template-columns: 2fr 1.5fr 1.5fr;
+}}
+
+.chart-header-row {{
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 8px 0 0;
+}}
+
+.metric-card {{
+    position: relative;
+    background: linear-gradient(180deg, rgba(18, 26, 43, 0.96) 0%, rgba(12, 18, 32, 0.98) 100%);
+    border: 1px solid rgba(36, 48, 65, 0.92);
+    border-radius: 14px;
+    padding: 15px 16px;
     min-width: 130px;
     transition: all 0.2s ease;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}}
+.metric-card::before {{
+    content: "";
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    top: 0;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(79, 140, 255, 0), rgba(79, 140, 255, 0.9), rgba(34, 211, 238, 0));
 }}
 .metric-card:hover {{
     border-color: {_BLUE};
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 16px 32px rgba(79, 140, 255, 0.12);
     transform: translateY(-2px);
 }}
 .metric-label {{
@@ -104,53 +345,81 @@ body {{
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }}
 
-/* Chart Cards */
 .chart-card {{
-    background: {_CARD};
+    background: linear-gradient(180deg, rgba(12, 18, 32, 0.98) 0%, rgba(8, 12, 22, 0.98) 100%);
     border: 1px solid {_BORDER};
-    border-radius: 12px;
+    border-radius: 16px;
     padding: 14px;
     overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+}}
+.chart-card:hover {{
+    border-color: rgba(79, 140, 255, 0.5);
+}}
+.chart-card .js-plotly-plot .plotly .main-svg {{
+    border-radius: 12px;
 }}
 
-/* Dropdown Styles - CRITICAL FIX */
 .dash-dropdown {{
     font-family: {_FONT} !important;
+}}
+.dash-dropdown .Select {{
+    color: {_TEXT} !important;
 }}
 .dash-dropdown .Select-control {{
     background-color: {_SURFACE} !important;
     border: 1px solid {_BORDER} !important;
-    border-radius: 8px !important;
-    min-height: 38px !important;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 18px rgba(0, 0, 0, 0.22) !important;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease !important;
 }}
 .dash-dropdown .Select-control:hover {{
     border-color: {_BLUE} !important;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3) !important;
+    box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.25), 0 12px 24px rgba(79, 140, 255, 0.16) !important;
 }}
-.dash-dropdown .Select-value-label {{
+.dash-dropdown.is-focused > .Select-control,
+.dash-dropdown.is-open > .Select-control,
+.dash-dropdown .is-focused:not(.is-open) > .Select-control {{
+    border-color: {_CYAN} !important;
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.45), 0 0 0 4px rgba(34, 211, 238, 0.12) !important;
+}}
+.dash-dropdown .Select-placeholder,
+.dash-dropdown .Select--single > .Select-control .Select-value,
+.dash-dropdown .has-value.Select--single > .Select-control .Select-value,
+.dash-dropdown .Select-value-label,
+.dash-dropdown .Select-value {{
     color: {_TEXT} !important;
     font-weight: 500 !important;
     font-size: 0.85rem !important;
-    line-height: 1.5 !important;
+    line-height: 42px !important;
+    opacity: 1 !important;
 }}
 .dash-dropdown .Select-placeholder {{
     color: {_MUTED} !important;
-    font-size: 0.85rem !important;
-    line-height: 1.5 !important;
+}}
+.dash-dropdown .Select-placeholder,
+.dash-dropdown .Select--single > .Select-control .Select-value {{
+    padding-left: 14px !important;
+    padding-right: 38px !important;
 }}
 .dash-dropdown .Select-input {{
     color: {_TEXT} !important;
     height: auto !important;
+    padding-left: 14px !important;
 }}
 .dash-dropdown .Select-input > input {{
     color: {_TEXT} !important;
     background: transparent !important;
-    padding: 8px 0 !important;
+    padding: 10px 0 !important;
+}}
+.dash-dropdown .Select-clear-zone,
+.dash-dropdown .Select-arrow-zone {{
+    display: flex !important;
+    align-items: center !important;
 }}
 .dash-dropdown .Select-arrow-zone {{
-    padding-right: 10px !important;
+    padding-right: 12px !important;
 }}
 .dash-dropdown .Select-arrow {{
     border-color: {_MUTED} transparent transparent !important;
@@ -161,16 +430,18 @@ body {{
     border-width: 3px 6px 6px !important;
 }}
 .dash-dropdown .Select-menu-outer {{
-    background-color: {_CARD} !important;
-    border: 1px solid {_BLUE} !important;
-    border-radius: 8px !important;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
-    margin-top: 4px !important;
+    background: linear-gradient(180deg, rgba(18, 26, 43, 0.98), rgba(8, 12, 22, 0.98)) !important;
+    border: 1px solid rgba(79, 140, 255, 0.65) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.48) !important;
+    margin-top: 6px !important;
     z-index: 9999 !important;
+    overflow: hidden !important;
 }}
 .dash-dropdown .Select-menu {{
     max-height: 320px !important;
     overflow-y: auto !important;
+    background: transparent !important;
 }}
 .dash-dropdown .Select-option {{
     background-color: transparent !important;
@@ -193,7 +464,21 @@ body {{
 .dash-dropdown .Select-option.is-selected:hover {{
     background-color: {_BLUE}40 !important;
 }}
-/* Fix for multi-value (if used) */
+.dash-dropdown .VirtualizedSelectOption {{
+    background: transparent !important;
+    color: {_TEXT} !important;
+    padding: 12px 14px !important;
+    font-size: 0.85rem !important;
+}}
+.dash-dropdown .VirtualizedSelectFocusedOption {{
+    background: {_SURFACE} !important;
+    color: {_TEXT} !important;
+}}
+.dash-dropdown .VirtualizedSelectSelectedOption {{
+    background: {_BLUE}30 !important;
+    color: {_TEXT} !important;
+    font-weight: 600 !important;
+}}
 .dash-dropdown .Select-value {{
     background-color: {_BLUE}20 !important;
     border: 1px solid {_BLUE}40 !important;
@@ -207,10 +492,9 @@ body {{
     color: {_RED} !important;
 }}
 
-/* Status Indicator */
 .status-dot {{
     display: inline-block;
-    width: 9px; 
+    width: 9px;
     height: 9px;
     border-radius: 50%;
     margin-right: 8px;
@@ -222,7 +506,6 @@ body {{
     50% {{ opacity: 0.6; transform: scale(0.95); }}
 }}
 
-/* Scrollbar Styling */
 ::-webkit-scrollbar {{
     width: 8px;
     height: 8px;
@@ -237,6 +520,42 @@ body {{
 ::-webkit-scrollbar-thumb:hover {{
     background: {_MUTED};
 }}
+
+@media (max-width: 1280px) {{
+    .toolbar-field.compact,
+    .toolbar-field.standard,
+    .toolbar-field.wide,
+    .toolbar-field.fill {{
+        grid-column: span 6;
+    }}
+    .section-grid.main,
+    .section-grid.market,
+    .section-grid.triple {{
+        grid-template-columns: 1fr;
+    }}
+}}
+
+@media (max-width: 820px) {{
+    .app-shell {{
+        padding: 14px;
+    }}
+    .topbar {{
+        flex-direction: column;
+    }}
+    .brand-panel,
+    .topbar-panel {{
+        min-width: 0;
+    }}
+    .toolbar-grid {{
+        grid-template-columns: 1fr;
+    }}
+    .toolbar-field.compact,
+    .toolbar-field.standard,
+    .toolbar-field.wide,
+    .toolbar-field.fill {{
+        grid-column: span 1;
+    }}
+}}
 """
 
 
@@ -246,6 +565,16 @@ def _metric_card(label: str, value_id: str) -> html.Div:
         children=[
             html.Div(label, className="metric-label"),
             html.Div(id=value_id, className="metric-value", style={"color": _TEXT}),
+        ],
+    )
+
+
+def _dropdown_field(label: str, control: html.Div, class_name: str = "standard") -> html.Div:
+    return html.Div(
+        className=f"toolbar-field {class_name}",
+        children=[
+            html.Div(label, className="toolbar-label"),
+            control,
         ],
     )
 
@@ -270,6 +599,7 @@ def create_app(
     get_daily_pnl: Callable[[int], pd.DataFrame],
     symbols: List[str],
     refresh_ms: int = 2000,
+    trigger_kill_switch: Callable[[str], Dict[str, Any]] | None = None,
 ) -> "dash.Dash":
     if not DASH_AVAILABLE:
         raise ImportError("Dashboard requires: pip install dash plotly dash-bootstrap-components")
@@ -305,82 +635,71 @@ def create_app(
 </html>"""
 
     app.layout = html.Div(
-        style={"maxWidth": "1680px", "margin": "0 auto", "padding": "14px 20px", "backgroundColor": _BG},
+        className="app-shell",
         children=[
             dcc.Interval(id="interval", interval=refresh_ms, n_intervals=0),
             html.Div(
-                style={
-                    "display": "flex",
-                    "alignItems": "center",
-                    "justifyContent": "space-between",
-                    "marginBottom": "16px",
-                    "paddingBottom": "14px",
-                    "borderBottom": f"1px solid {_BORDER}",
-                },
+                className="topbar",
                 children=[
                     html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "14px"},
+                        className="brand-panel",
                         children=[
                             html.Div(
-                                style={
-                                    "width": "40px",
-                                    "height": "40px",
-                                    "borderRadius": "10px",
-                                    "background": f"linear-gradient(135deg, {_BLUE}, {_CYAN})",
-                                    "display": "flex",
-                                    "alignItems": "center",
-                                    "justifyContent": "center",
-                                    "fontSize": "19px",
-                                    "fontWeight": "700",
-                                    "color": "#fff",
-                                    "boxShadow": f"0 4px 12px {_BLUE}40",
-                                },
-                                children="Q",
-                            ),
-                            html.Div(
+                                className="brand-lockup",
                                 children=[
-                                    html.H3(
-                                        "TRADING TERMINAL PRO",
-                                        style={
-                                            "margin": "0",
-                                            "fontSize": "1.1rem",
-                                            "fontWeight": "700",
-                                            "color": _TEXT,
-                                            "letterSpacing": "0.8px",
-                                            "textShadow": "0 1px 2px rgba(0,0,0,0.3)",
-                                        },
+                                    html.Div("Q", className="brand-mark"),
+                                    html.Div(
+                                        className="brand-copy",
+                                        children=[
+                                            html.Div("Quant AI Monitor", className="brand-eyebrow"),
+                                            html.H3("TRADING TERMINAL PRO", className="brand-title"),
+                                            html.Span(id="header-subtitle", className="brand-subtitle"),
+                                        ],
                                     ),
-                                    html.Span(
-                                        id="header-subtitle", 
-                                        style={
-                                            "fontSize": "0.75rem", 
-                                            "color": _MUTED,
-                                            "fontWeight": "500",
-                                        }
-                                    ),
-                                ]
+                                ],
                             ),
                         ],
                     ),
                     html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "16px"},
+                        className="topbar-actions",
                         children=[
                             html.Div(
-                                id="status-indicator", 
-                                style={
-                                    "display": "flex", 
-                                    "alignItems": "center", 
-                                    "fontSize": "0.82rem",
-                                    "fontWeight": "600",
-                                    "padding": "6px 12px",
-                                    "background": f"{_SURFACE}",
-                                    "border": f"1px solid {_BORDER}",
-                                    "borderRadius": "8px",
-                                }
+                                className="topbar-panel danger",
+                                children=[
+                                    html.Div("Emergency Control", className="topbar-label"),
+                                    html.Button(
+                                        "Activate Kill Switch",
+                                        id="kill-switch-btn",
+                                        n_clicks=0,
+                                        className="kill-switch-btn",
+                                    ),
+                                    html.Div(
+                                        id="kill-switch-status",
+                                        className="kill-switch-status",
+                                        children="One-click flatten and halt trading.",
+                                    ),
+                                ],
                             ),
                             html.Div(
-                                style={"width": "200px"},
+                                className="topbar-panel",
                                 children=[
+                                    html.Div("Engine Status", className="topbar-label"),
+                                    html.Div(
+                                        id="status-indicator",
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "fontSize": "0.82rem",
+                                            "fontWeight": "600",
+                                            "padding": "6px 0",
+                                        },
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="topbar-panel",
+                                children=[
+                                    html.Div("Active Symbol", className="topbar-label"),
                                     dcc.Dropdown(
                                         id="symbol-select",
                                         options=symbol_options,
@@ -388,14 +707,73 @@ def create_app(
                                         clearable=False,
                                         className="dash-dropdown",
                                         style={"fontSize": "0.85rem"},
-                                    )
+                                    ),
                                 ],
                             ),
                         ],
                     ),
                 ],
             ),
-            html.Div(id="config-bar", style={"display": "flex", "gap": "8px", "marginBottom": "12px", "flexWrap": "wrap"}),
+            html.Div(
+                className="shell-card toolbar-card",
+                children=[
+                    html.Div(
+                        className="toolbar-grid",
+                        children=[
+                            _dropdown_field(
+                                "Leaderboard Rank",
+                                dcc.Dropdown(
+                                    id="rank-basis",
+                                    options=[
+                                        {"label": "Rank by Score", "value": "score"},
+                                        {"label": "Rank by Sharpe", "value": "sharpe"},
+                                        {"label": "Rank by Return", "value": "return"},
+                                        {"label": "Rank by Calmar", "value": "calmar"},
+                                        {"label": "Rank by Stability", "value": "stability"},
+                                    ],
+                                    value="score",
+                                    clearable=False,
+                                    className="dash-dropdown",
+                                ),
+                                "compact",
+                            ),
+                            _dropdown_field(
+                                "Scorecard Focus",
+                                dcc.Dropdown(
+                                    id="scorecard-strategy",
+                                    options=[],
+                                    value="",
+                                    clearable=False,
+                                    className="dash-dropdown",
+                                    placeholder="Select strategy and symbol",
+                                ),
+                                "wide",
+                            ),
+                            _dropdown_field(
+                                "Compare View",
+                                dcc.Dropdown(
+                                    id="compare-metric",
+                                    options=[
+                                        {"label": "Risk / Return", "value": "risk_return"},
+                                        {"label": "Quality", "value": "quality"},
+                                        {"label": "Composite", "value": "composite"},
+                                    ],
+                                    value="risk_return",
+                                    clearable=False,
+                                    className="dash-dropdown",
+                                ),
+                                "compact",
+                            ),
+                            _dropdown_field(
+                                "Feed Snapshot",
+                                html.Div(id="footer-ticks", className="toolbar-hint"),
+                                "fill",
+                            ),
+                        ],
+                    )
+                ],
+            ),
+            html.Div(id="config-bar", className="config-bar"),
             html.Div(
                 id="metrics-row",
                 style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(130px, 1fr))", "gap": "10px", "marginBottom": "12px"},
@@ -411,62 +789,7 @@ def create_app(
                 ],
             ),
             html.Div(
-                className="shell-card",
-                style={
-                    "marginBottom": "14px", 
-                    "display": "grid", 
-                    "gridTemplateColumns": "200px 280px 240px 1fr", 
-                    "gap": "12px",
-                    "alignItems": "center",
-                },
-                children=[
-                    dcc.Dropdown(
-                        id="rank-basis",
-                        options=[
-                            {"label": "🏆 Rank: Score", "value": "score"},
-                            {"label": "📊 Rank: Sharpe", "value": "sharpe"},
-                            {"label": "💰 Rank: Return", "value": "return"},
-                            {"label": "📈 Rank: Calmar", "value": "calmar"},
-                            {"label": "⚖️ Rank: Stability", "value": "stability"},
-                        ],
-                        value="score",
-                        clearable=False,
-                        className="dash-dropdown",
-                    ),
-                    dcc.Dropdown(
-                        id="scorecard-strategy", 
-                        options=[], 
-                        value="", 
-                        clearable=False, 
-                        className="dash-dropdown",
-                        placeholder="Select Strategy..."
-                    ),
-                    dcc.Dropdown(
-                        id="compare-metric",
-                        options=[
-                            {"label": "📉 Compare: Risk/Return", "value": "risk_return"},
-                            {"label": "✨ Compare: Quality", "value": "quality"},
-                            {"label": "🎯 Compare: Composite", "value": "composite"},
-                        ],
-                        value="risk_return",
-                        clearable=False,
-                        className="dash-dropdown",
-                    ),
-                    html.Div(
-                        id="footer-ticks", 
-                        style={
-                            "display": "flex", 
-                            "alignItems": "center", 
-                            "justifyContent": "flex-end", 
-                            "color": _MUTED, 
-                            "fontSize": "0.75rem",
-                            "fontWeight": "500",
-                        }
-                    ),
-                ],
-            ),
-            html.Div(
-                style={"display": "grid", "gridTemplateColumns": "2fr 1.25fr", "gap": "12px", "marginBottom": "12px"},
+                className="section-grid main",
                 children=[
                     html.Div(className="chart-card", children=[dcc.Graph(id="strategy-leaderboard", config={"displayModeBar": False}, style={"height": "340px"})]),
                     html.Div(className="chart-card", children=[dcc.Graph(id="strategy-scorecard", config={"displayModeBar": False}, style={"height": "340px"})]),
@@ -474,16 +797,16 @@ def create_app(
             ),
             html.Div(className="chart-card", style={"marginBottom": "12px"}, children=[dcc.Graph(id="strategy-compare", config={"displayModeBar": False}, style={"height": "360px"})]),
             html.Div(
-                style={"display": "grid", "gridTemplateColumns": "3fr 2fr", "gap": "12px", "marginBottom": "12px"},
+                className="section-grid market",
                 children=[
                     html.Div(
                         className="chart-card",
                         children=[
                             html.Div(
-                                style={"display": "flex", "justifyContent": "flex-end", "padding": "2px 8px 0 0"},
+                                className="chart-header-row",
                                 children=[
                                     html.Div(
-                                        style={"width": "100px"},
+                                        style={"width": "116px"},
                                         children=[
                                             dcc.Dropdown(
                                                 id="interval-select",
@@ -509,7 +832,7 @@ def create_app(
                 children=[html.Div(className="chart-card", children=[dcc.Graph(id="multi-tf-panel", config={"displayModeBar": False}, style={"height": "200px"})])],
             ),
             html.Div(
-                style={"display": "grid", "gridTemplateColumns": "2fr 1.5fr 1.5fr", "gap": "12px", "marginBottom": "12px"},
+                className="section-grid triple",
                 children=[
                     html.Div(className="chart-card", children=[dcc.Graph(id="equity-chart", config={"displayModeBar": False}, style={"height": "340px"})]),
                     html.Div(className="chart-card", children=[dcc.Graph(id="stats-panel", config={"displayModeBar": False}, style={"height": "340px"})]),
@@ -533,6 +856,62 @@ def create_app(
                 "color": color,
                 "border": f"1px solid {color}40",
             },
+        )
+
+    @app.callback(
+        [
+            Output("kill-switch-status", "children"),
+            Output("kill-switch-status", "style"),
+            Output("kill-switch-btn", "children"),
+            Output("kill-switch-btn", "disabled"),
+        ],
+        [Input("interval", "n_intervals"), Input("kill-switch-btn", "n_clicks")],
+    )
+    def sync_kill_switch(_n: int, n_clicks: int):
+        error_message = ""
+        ctx = getattr(dash, "callback_context", None)
+        triggered = ctx.triggered[0]["prop_id"].split(".")[0] if ctx and ctx.triggered else ""
+
+        if triggered == "kill-switch-btn" and n_clicks:
+            if trigger_kill_switch is None:
+                error_message = "Kill switch is unavailable in this session."
+            else:
+                try:
+                    result = trigger_kill_switch("Manual dashboard activation")
+                    if result.get("status") == "error":
+                        error_message = f"Activation failed: {result.get('message', 'unknown error')}"
+                except Exception as e:
+                    error_message = f"Activation failed: {e}"
+
+        state = get_state()
+        active = bool(state.get("kill_switch_active", False))
+        reason = str(state.get("kill_switch_reason", "") or "")
+        if active:
+            return (
+                f"Kill switch active. Trading halted. {reason}".strip(),
+                {"color": _RED, "fontWeight": "700"},
+                "Kill Switch Engaged",
+                True,
+            )
+        if error_message:
+            return (
+                error_message,
+                {"color": _RED, "fontWeight": "600"},
+                "Retry Kill Switch",
+                False,
+            )
+        if trigger_kill_switch is None:
+            return (
+                "Kill switch is unavailable for this dashboard session.",
+                {"color": _MUTED},
+                "Kill Switch Unavailable",
+                True,
+            )
+        return (
+            "One-click flatten and halt trading immediately.",
+            {"color": _MUTED},
+            "Activate Kill Switch",
+            False,
         )
 
     @app.callback(
@@ -580,6 +959,8 @@ def create_app(
         wr = float(stats.get("win_rate", 0))
         pf = float(stats.get("profit_factor", 0))
         total_t = int(stats.get("total_trades", 0))
+        kill_switch_active = bool(state.get("kill_switch_active", False))
+        kill_switch_reason = str(state.get("kill_switch_reason", "") or "")
 
         def _pnl_style(val: float) -> dict:
             color = _GREEN if val > 0 else (_RED if val < 0 else _TEXT)
@@ -592,14 +973,19 @@ def create_app(
         pf_s = {"color": _GREEN if pf >= 1 else _RED, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
         tr_s = {"color": _CYAN, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
 
-        dot_color = _GREEN if running else _RED
+        dot_color = _RED if kill_switch_active else (_GREEN if running else _AMBER)
         status_children = [
             html.Span(className="status-dot", style={"backgroundColor": dot_color}),
-            html.Span("LIVE" if running else "STOPPED", style={"color": dot_color, "fontWeight": "600"}),
+            html.Span(
+                "KILL SWITCH" if kill_switch_active else ("LIVE" if running else "HALTED"),
+                style={"color": dot_color, "fontWeight": "600"},
+            ),
         ]
         subtitle = f"Paper Trading • {strategy_name}" if strategy_name else "Paper Trading • Strategy Terminal"
         fusion_mode = state.get("fusion_mode", "")
         badges = [_badge("Leverage", f"{leverage:.0f}x", _RED if leverage > 1 else _MUTED)]
+        if kill_switch_active:
+            badges.insert(0, _badge("Kill Switch", "ACTIVE", _RED))
         if fusion_mode:
             badges.append(_badge("Fusion", fusion_mode.replace("_", " ").title(), _PURPLE))
         if strategy_name:
@@ -614,6 +1000,8 @@ def create_app(
         init_cash = float(state.get("initial_cash", 0))
         if init_cash:
             badges.append(_badge("Initial", f"${init_cash:,.0f}", _AMBER))
+        if kill_switch_active and kill_switch_reason:
+            badges.append(_badge("Reason", kill_switch_reason[:36], _RED))
 
         footer_text = f"Bars: {bars} • Ticks: {ticks:,}"
         return (

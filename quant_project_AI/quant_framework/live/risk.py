@@ -110,6 +110,10 @@ class CircuitBreaker:
         self._trip_time = time.time()
         logger.critical("CIRCUIT BREAKER TRIPPED: %s", reason)
 
+    def trip(self, reason: str) -> None:
+        """Manually trip the breaker from an operator action."""
+        self._trip(reason)
+
     def reset(self) -> None:
         """Manual reset — requires human decision to resume trading."""
         logger.warning("Circuit breaker manually reset")

@@ -392,6 +392,7 @@ def main() -> None:
                 get_daily_pnl=lambda days: journal.get_daily_pnl(days),
                 symbols=all_fsyms,
                 refresh_ms=2000,
+                trigger_kill_switch=runner.activate_kill_switch,
             )
             run_dashboard_thread(app, host="0.0.0.0", port=args.dashboard_port)
             logger.info("Dashboard → http://localhost:%d", args.dashboard_port)

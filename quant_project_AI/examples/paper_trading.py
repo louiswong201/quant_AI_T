@@ -270,6 +270,7 @@ def main() -> None:
                 get_daily_pnl=lambda days: journal.get_daily_pnl(days),
                 symbols=symbols,
                 refresh_ms=2000,
+                trigger_kill_switch=runner.activate_kill_switch,
             )
 
             dash_thread = run_dashboard_thread(

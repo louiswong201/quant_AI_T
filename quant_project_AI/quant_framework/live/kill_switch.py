@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,14 @@ class KillSwitch:
         self._alert = alert_manager
         self._triggered = False
 
-    async def flatten_all(self, reason: str) -> None:
+    async def flatten_all(self, reason: str) -> List[Dict[str, Any]]:
         """Cancel all orders, market-close all positions, alert."""
         self._triggered = True
-        get_open = getattr(self._broker, "get_open_orders_async", None)
-        cancel_order = getattr(self._broker, "cancel_order_async", None)
-        submit_order_async = getattr(self._broker, "submit_order_async", None)
+        exec_broker = getattr(self._broker, "_broker", self._broker)
+        get_open = getattr(exec_broker, "get_open_orders_async", None)
+        cancel_order = getattr(exec_broker, "cancel_order_async", None)
+        submit_order_async = getattr(exec_broker, "submit_order_async", None)
+        closed: List[Dict[str, Any]] = []
 
         if get_open is not None and cancel_order is not None:
             try:
@@ -38,7 +40,7 @@ class KillSwitch:
             except Exception as e:
                 logger.error("Kill switch: cancel orders failed: %s", e)
 
-        positions = self._broker.get_positions()
+        positions = exec_broker.get_positions()
         for symbol, qty in positions.items():
             if abs(float(qty)) <= 1e-10:
                 continue
@@ -51,10 +53,16 @@ class KillSwitch:
             }
             try:
                 if submit_order_async is not None:
-                    await submit_order_async(sig)
+                    res = await submit_order_async(sig)
                 else:
                     sig["order_type"] = "market"
-                    await asyncio.to_thread(self._broker.submit_order, sig)
+                    res = await asyncio.to_thread(exec_broker.submit_order, sig)
+                closed.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "requested_shares": abs(float(qty)),
+                    "result": res,
+                })
             except Exception as e:
                 logger.error("Kill switch: close %s failed: %s", symbol, e)
 
@@ -65,6 +73,8 @@ class KillSwitch:
                     await send("CRITICAL", "KILL SWITCH", reason)
                 elif callable(send):
                     await asyncio.to_thread(send, "CRITICAL", "KILL SWITCH", reason)
+
+        return closed
 
     @property
     def is_triggered(self) -> bool:

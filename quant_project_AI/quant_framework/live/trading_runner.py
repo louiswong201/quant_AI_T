@@ -20,8 +20,10 @@ import pandas as pd
 
 from ..backtest.config import BacktestConfig
 from ..broker.base import Broker
+from .kill_switch import KillSwitch
 from .kernel_adapter import KernelAdapter, MultiTFAdapter
 from .price_feed import BarEvent, PriceFeedManager, TickEvent
+from .risk import RiskManagedBroker
 from .trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
@@ -74,10 +76,16 @@ class TradingRunner:
         self._state_cache: Optional[Dict[str, Any]] = None
         self._state_cache_ts: float = 0.0
         self._STATE_CACHE_TTL: float = 1.5
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._kill_switch_active = False
+        self._kill_switch_reason = ""
+        self._kill_switch_triggered_at = ""
+        self._kill_switch_in_progress = False
 
     async def run(self, lookback: int = 200) -> None:
         self._running = True
         loop = asyncio.get_running_loop()
+        self._loop = loop
         if platform.system() != "Windows":
             for sig_name in (signal.SIGINT, signal.SIGTERM):
                 try:
@@ -375,6 +383,103 @@ class TradingRunner:
         logger.info("Shutdown signal received")
         self._running = False
 
+    def _invalidate_state_cache(self) -> None:
+        self._state_cache = None
+        self._state_cache_ts = 0.0
+
+    async def _run_update_callback(self) -> None:
+        if not self._on_update:
+            return
+        try:
+            result = self._on_update()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            logger.debug("Update callback error: %s", e)
+
+    async def _activate_kill_switch(self, reason: str) -> Dict[str, Any]:
+        if self._kill_switch_in_progress:
+            return {"status": "busy", "message": "kill switch already running"}
+        if self._kill_switch_active:
+            return {"status": "already_triggered", "message": self._kill_switch_reason}
+
+        self._kill_switch_in_progress = True
+        self._running = False
+        self._kill_switch_active = True
+        self._kill_switch_reason = reason
+        self._kill_switch_triggered_at = datetime.now(timezone.utc).isoformat()
+        self._invalidate_state_cache()
+
+        positions_before = {
+            sym: qty for sym, qty in self._broker.get_positions().items()
+            if abs(float(qty)) > 1e-10
+        }
+
+        try:
+            closed = await KillSwitch(self._broker).flatten_all(reason)
+            for item in closed:
+                result = item.get("result", {}) or {}
+                if result.get("status") != "filled":
+                    continue
+
+                symbol = str(item.get("symbol", ""))
+                prior_qty = float(positions_before.get(symbol, 0.0))
+                if abs(prior_qty) <= 1e-10:
+                    continue
+
+                fill_price = float(result.get("fill_price", 0.0) or 0.0)
+                filled_shares = float(result.get("filled_shares", abs(prior_qty)) or abs(prior_qty))
+                commission = float(result.get("commission", 0.0) or 0.0)
+
+                entry_data = self._entry_prices.get(symbol)
+                entry_price = entry_data[0] if isinstance(entry_data, tuple) else float(entry_data or 0.0)
+                pnl = 0.0
+                if fill_price > 0 and entry_price > 0:
+                    if prior_qty > 0:
+                        pnl = (fill_price - entry_price) * filled_shares - commission
+                    else:
+                        pnl = (entry_price - fill_price) * filled_shares - commission
+
+                self._record_pnl_to_broker(pnl)
+                self._journal.record_trade(
+                    symbol=symbol,
+                    side=str(item.get("side", "")),
+                    shares=filled_shares,
+                    price=fill_price,
+                    commission=commission,
+                    pnl=pnl,
+                    strategy="kill_switch",
+                )
+                self._entry_prices.pop(symbol, None)
+                self._sl_triggered.pop(symbol, None)
+
+            if isinstance(self._broker, RiskManagedBroker) and self._broker._cb is not None:
+                self._broker._cb.trip(f"Manual kill switch: {reason}")
+
+            self._take_equity_snapshot()
+            self._invalidate_state_cache()
+            await self._run_update_callback()
+            logger.critical("KILL SWITCH ACTIVATED: %s", reason)
+            return {
+                "status": "triggered",
+                "message": reason,
+                "closed_positions": len(closed),
+            }
+        except Exception as e:
+            logger.exception("Kill switch activation failed: %s", e)
+            self._kill_switch_reason = f"{reason} (error: {e})"
+            self._invalidate_state_cache()
+            return {"status": "error", "message": str(e)}
+        finally:
+            self._kill_switch_in_progress = False
+
+    def activate_kill_switch(self, reason: str = "Manual dashboard activation") -> Dict[str, Any]:
+        """Thread-safe kill switch entrypoint for the dashboard/UI layer."""
+        if self._loop is not None and self._loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(self._activate_kill_switch(reason), self._loop)
+            return fut.result(timeout=15)
+        return asyncio.run(self._activate_kill_switch(reason))
+
     async def stop(self) -> None:
         self._running = False
         await self._feed.stop_all()
@@ -566,6 +671,9 @@ class TradingRunner:
             "take_profit_pct": self._bt_config.take_profit_pct if self._bt_config else None,
             "strategy_name": next(iter(self._strategies.values())).name if self._strategies else "",
             "strategy_performance": [],
+            "kill_switch_active": self._kill_switch_active,
+            "kill_switch_reason": self._kill_switch_reason,
+            "kill_switch_triggered_at": self._kill_switch_triggered_at,
         }
         state.update(self._build_multi_tf_info())
         return state
@@ -662,6 +770,9 @@ class TradingRunner:
             "stop_loss_pct": self._bt_config.stop_loss_pct if self._bt_config else None,
             "take_profit_pct": self._bt_config.take_profit_pct if self._bt_config else None,
             "strategy_name": next(iter(self._strategies.values())).name if self._strategies else "",
+            "kill_switch_active": self._kill_switch_active,
+            "kill_switch_reason": self._kill_switch_reason,
+            "kill_switch_triggered_at": self._kill_switch_triggered_at,
         }
         state.update(self._build_multi_tf_info())
         state["strategy_performance"] = self._build_strategy_performance(
