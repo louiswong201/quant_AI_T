@@ -25,7 +25,9 @@ from numba import njit
 from .config import BacktestConfig
 
 _logger = _logging.getLogger(__name__)
-check_numba_cache()
+if not check_numba_cache():
+    from ..warmup import warmup_if_needed as _warmup_if_needed
+    _warmup_if_needed()
 from .kernels import (
     DEFAULT_PARAM_GRIDS,
     KERNEL_NAMES,

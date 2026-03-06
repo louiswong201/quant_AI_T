@@ -279,8 +279,12 @@ class BacktestEngine:
                         ref_px *= (1.0 - slippage_adj)
                     else:
                         ref_px *= (1.0 + slippage_adj)
+                ac_bar = bar_data_map.get(ac_sym)
+                if ac_bar is None:
+                    logger.warning("No bar data for symbol '%s' at bar %d, skipping fill", ac_sym, i)
+                    continue
                 ac_fill = fill_sim.execute_market(
-                    ac_order, ref_px, bar_data_map.get(ac_sym, list(bar_data_map.values())[0]), i, current_date,
+                    ac_order, ref_px, ac_bar, i, current_date,
                 )
                 if ac_fill:
                     portfolio.apply_fill(ac_fill)

@@ -62,27 +62,46 @@ class KernelAdapter:
     def name(self) -> str:
         return self._name
 
+    _DICT_KEY_ORDER: Dict[str, tuple] = {
+        "MA": ("ma_short", "ma_long"),
+        "RSI": ("rsi_period", "os", "ob"),
+        "MACD": ("fast", "slow", "signal"),
+        "Drift": ("lookback", "drift_threshold", "hold_period"),
+        "RAMOM": ("mom_period", "vol_period", "entry_z", "exit_z"),
+        "Turtle": ("entry_period", "exit_period", "atr_period", "atr_mult"),
+        "Bollinger": ("bb_period", "bb_std"),
+        "Keltner": ("ema_period", "atr_period", "atr_mult"),
+        "MultiFactor": ("rsi_period", "mom_period", "vol_period", "long_thresh", "short_thresh"),
+        "VolRegime": ("atr_period", "vol_threshold", "ma_short", "ma_long", "rsi_os", "rsi_ob"),
+        "MESA": ("fast_limit", "slow_limit"),
+        "KAMA": ("period", "fast_sc", "slow_sc"),
+        "Donchian": ("entry_period", "exit_period"),
+        "ZScore": ("lookback", "entry_z", "exit_z", "stop_z"),
+        "MomBreak": ("high_period", "proximity_pct", "atr_period", "atr_trail"),
+        "RegimeEMA": ("vol_period", "ema_fast", "ema_slow", "vol_threshold"),
+        "DualMom": ("abs_period", "rel_period", "entry_z", "exit_z"),
+        "Consensus": ("ma_short", "ma_long", "rsi_period", "rsi_os", "rsi_ob",
+                       "bb_period", "bb_std", "min_votes"),
+    }
+
     @staticmethod
     def _resolve_kernel_params(name: str, params: Optional[Dict[str, Any]]) -> tuple:
-        """Convert user-friendly param dict to kernel tuple, or use defaults."""
+        """Convert user-friendly param dict/list/tuple to kernel tuple, or use defaults.
+
+        Supports all 18 strategies via explicit key-to-position mapping.
+        """
         if params is None:
             return _PARAM_DEFAULTS[name]
         if isinstance(params, tuple):
             return params
+        if isinstance(params, list):
+            return tuple(params)
 
         base = list(_PARAM_DEFAULTS[name])
-        if name == "MA":
-            if "ma_short" in params:
-                base[0] = int(params["ma_short"])
-            if "ma_long" in params:
-                base[1] = int(params["ma_long"])
-        elif name == "RSI":
-            if "rsi_period" in params:
-                base[0] = int(params["rsi_period"])
-            if "os" in params:
-                base[1] = float(params["os"])
-            if "ob" in params:
-                base[2] = float(params["ob"])
+        keys = KernelAdapter._DICT_KEY_ORDER.get(name, ())
+        for idx, key in enumerate(keys):
+            if key in params and idx < len(base):
+                base[idx] = type(base[idx])(params[key])
         return tuple(base)
 
     def generate_signal(

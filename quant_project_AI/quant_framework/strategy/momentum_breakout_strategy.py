@@ -105,7 +105,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             if new_stop > self._trailing_stop.get(symbol, 0.0):
                 self._trailing_stop[symbol] = new_stop
             if current_price < self._trailing_stop.get(symbol, 0.0):
-                self._trailing_stop[symbol] = 0.0
+                self._trailing_stop.pop(symbol, None)
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         # 开仓
@@ -155,7 +155,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             if new_stop > self._trailing_stop.get(symbol, 0.0):
                 self._trailing_stop[symbol] = new_stop
             if current_price < self._trailing_stop.get(symbol, 0.0):
-                self._trailing_stop[symbol] = 0.0
+                self._trailing_stop.pop(symbol, None)
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
 
         if holdings == 0:

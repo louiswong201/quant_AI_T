@@ -50,7 +50,8 @@ def compute_correlation_matrix(
         # Use daily return series from health snapshots
         rets = np.array([h.get("ret_pct", 0) for h in reversed(trend)], dtype=np.float64)
         if len(rets) > 1:
-            daily_rets = np.diff(rets) / np.maximum(np.abs(rets[:-1]), 1e-12)
+            equity = 1.0 + rets
+            daily_rets = np.diff(equity) / np.maximum(equity[:-1], 1e-12)
         else:
             daily_rets = rets
         returns_dict[key] = daily_rets

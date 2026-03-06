@@ -460,7 +460,7 @@ class LorentzianClassificationStrategy(BaseStrategy):
             sig = self._classify_and_signal(close, high, low, i, symbol)
             if sig["action"] != "hold":
                 signals.append(sig)
-        return signals if signals else {"action": "hold"}
+        return signals if signals else [{"action": "hold"}]
 
     # ── 核心分类 + 信号生成 ───────────────────────────────────
 

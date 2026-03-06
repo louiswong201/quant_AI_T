@@ -21,6 +21,7 @@ class BaseStrategy(ABC):
         name: str,
         initial_capital: float = 1000000,
         rag_provider: Optional["RagContextProvider"] = None,
+        capital_fraction: float = DEFAULT_CAPITAL_FRACTION,
     ):
         """
         初始化策略
@@ -29,6 +30,7 @@ class BaseStrategy(ABC):
             name: 策略名称
             initial_capital: 初始资金
             rag_provider: 可选 RAG 上下文提供者，用于 on_bar 中获取非结构化上下文（新闻/研报等）
+            capital_fraction: 仓位占比 (0.0–1.0)，默认 0.95
         """
         self.name = name
         self.initial_capital = initial_capital
@@ -36,6 +38,7 @@ class BaseStrategy(ABC):
         self.cash = initial_capital
         self.portfolio_value = initial_capital
         self.rag_provider = rag_provider
+        self._capital_fraction = capital_fraction
 
     @property
     def min_lookback(self) -> int:

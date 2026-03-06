@@ -167,7 +167,8 @@ class RiskGate:
             if action == "buy" and cash < notional:
                 return "insufficient cash"
 
-        pos = int(positions.get(symbol, 0))
+        raw_pos = positions.get(symbol, 0)
+        pos = float(raw_pos) if isinstance(raw_pos, float) else int(raw_pos)
         if action == "sell":
             if not self.config.allow_short and shares > pos:
                 return "insufficient position"

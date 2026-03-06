@@ -207,7 +207,7 @@ class TradeJournal:
         self._flush()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT pnl FROM trades WHERE pnl != 0"
+                "SELECT pnl FROM trades WHERE pnl IS NOT NULL"
             ).fetchall()
             comm_row = self._conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(commission), 0) FROM trades"

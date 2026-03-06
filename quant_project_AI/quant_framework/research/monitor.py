@@ -427,10 +427,13 @@ def run_monitor(
         status = assess_status(metrics, history, original_sharpe)
         metrics["status"] = status
 
+        _health_keys = {"sharpe_30d", "drawdown_pct", "dd_duration", "trade_freq",
+                        "win_rate", "ret_pct", "n_trades"}
+        safe_metrics = {k: v for k, v in metrics.items() if k in _health_keys}
         db.record_health(
             sym, strategy,
             leverage=leverage, interval=tf,
-            **{k: v for k, v in metrics.items() if k != "status" and k != "error"},
+            **safe_metrics,
             status=status,
         )
 

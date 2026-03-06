@@ -84,6 +84,7 @@ def discover_variants(
     *,
     expanded_grids: Optional[Dict[str, list]] = None,
     max_combos_per_strategy: int = 200,
+    **kwargs,
 ) -> List[Dict[str, Any]]:
     """Mine unexplored parameter combinations from grid gaps.
 
@@ -92,6 +93,7 @@ def discover_variants(
         symbols: Symbols to test.
         config_maker: Callable(sym, leverage, interval) → BacktestConfig.
         expanded_grids: Full expanded grids (if available).
+        **kwargs: leverage and interval overrides (default 1.0 / "1d").
         max_combos_per_strategy: Cap per strategy to limit runtime.
 
     Returns list of discovery results sorted by Sharpe.
@@ -111,7 +113,7 @@ def discover_variants(
     for sym in symbols:
         if sym not in data:
             continue
-        config = config_maker(sym, 1.0, "1d")
+        config = config_maker(sym, kwargs.get("leverage", 1.0), kwargs.get("interval", "1d"))
         try:
             result = run_robust_scan(
                 symbols=[sym],

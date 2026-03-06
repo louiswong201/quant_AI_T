@@ -8,7 +8,7 @@ Broker 抽象：实盘/纸交易统一接口
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 class Broker(ABC):
@@ -45,3 +45,28 @@ class Broker(ABC):
             "cash": self.get_cash(),
             "positions": self.get_positions(),
         }
+
+    async def submit_order_async(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        """Async submit. Default: run sync submit_order."""
+        return self.submit_order(signal)
+
+    async def cancel_order_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        raise NotImplementedError("cancel_order_async")
+
+    async def get_order_status_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        raise NotImplementedError("get_order_status_async")
+
+    async def get_open_orders_async(self, symbol: str = "") -> List[Dict[str, Any]]:
+        return []
+
+    async def sync_positions(self) -> Dict[str, Union[int, float]]:
+        return self.get_positions()
+
+    async def sync_balance(self) -> Dict[str, Any]:
+        return {"cash": self.get_cash()}
+
+    def get_available_margin(self) -> float:
+        return self.get_cash()
+
+    def get_margin_ratio(self) -> float:
+        return 1.0

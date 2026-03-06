@@ -38,8 +38,25 @@ class BacktestConfig:
     ``bars_per_day`` which control annualization and per-bar cost scaling.
     """
 
+    # -- Asset class (V5) ------------------------------------------------
+    asset_class: str = "crypto_perp"
+    margin_model_type: str = "default"  # "default"|"crypto_futures"|"reg_t"|"spot"
+
     # -- Market fill mode ------------------------------------------------
     market_fill_mode: str = "next_open"
+
+    # -- Commission: maker/taker distinction (V5) -------------------------
+    commission_pct_maker: float = 0.0002
+    commission_pct_taker: float = 0.0004
+    maker_ratio: float = 0.3
+
+    # -- Commission: US equity IBKR fixed (V5) ----------------------------
+    commission_per_share: float = 0.005
+    commission_min: float = 1.0
+    exchange_fee_per_share: float = 0.003
+
+    # -- Margin interest (V5) --------------------------------------------
+    margin_interest_rate: float = 0.0583
 
     # -- Commission (proportion, 0.001 = 0.1%) ---------------------------
     commission_pct_buy: float = 0.001

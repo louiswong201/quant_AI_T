@@ -174,4 +174,4 @@ class MACDStrategy(BaseStrategy):
                 holdings = self.positions.get(symbol, 0)
                 if holdings > 0:
                     signals.append({"action": "sell", "symbol": symbol, "shares": holdings})
-        return signals or {"action": "hold"}
+        return signals or [{"action": "hold"}]

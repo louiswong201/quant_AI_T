@@ -87,11 +87,18 @@ def optimal_thread_config() -> dict:
     }
 
 
-def check_numba_cache() -> bool:
-    """Return True if Numba cache files exist for the kernels module.
+def check_numba_cache(full: bool = True) -> bool:
+    """Return True if Numba cache files exist for kernels and robustness.
+
+    Parameters
+    ----------
+    full : bool
+        When *True* (default), require both ``kernels.*.nbi`` and
+        ``robust_scan.*.nbi`` to be present.  When *False*, only check
+        kernels (legacy behaviour).
 
     Logs a warning when the cache is missing — the first run will need
-    to JIT-compile ~96 functions which can take several minutes.
+    to JIT-compile ~96+ functions which can take several minutes.
     """
     custom = os.environ.get("NUMBA_CACHE_DIR")
     if custom:
@@ -99,12 +106,29 @@ def check_numba_cache() -> bool:
     else:
         cache_dir = Path(__file__).parent / "backtest" / "__pycache__"
 
-    if cache_dir.is_dir() and any(cache_dir.glob("kernels.*.nbi")):
+    if not cache_dir.is_dir():
+        logger.warning(
+            "Numba cache directory not found — first run will JIT-compile "
+            "~96+ functions (may take 5-10 min on older CPUs).  "
+            "Run  python -m quant_framework.warmup  to pre-compile."
+        )
+        return False
+
+    has_kernels = any(cache_dir.glob("kernels.*.nbi"))
+    has_robust = any(cache_dir.glob("robust_scan.*.nbi"))
+
+    if has_kernels and (has_robust or not full):
         return True
 
+    missing = []
+    if not has_kernels:
+        missing.append("kernels")
+    if full and not has_robust:
+        missing.append("robust_scan")
+
     logger.warning(
-        "Numba cache not found — first run will JIT-compile ~96 functions "
-        "(may take 5-10 min on older CPUs).  Run  python -m quant_framework.warmup  "
-        "to pre-compile."
+        "Numba cache incomplete (missing: %s) — first run will JIT-compile. "
+        "Run  python -m quant_framework.warmup  to pre-compile.",
+        ", ".join(missing),
     )
     return False

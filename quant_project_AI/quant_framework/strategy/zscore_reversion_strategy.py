@@ -92,12 +92,21 @@ class ZScoreReversionStrategy(BaseStrategy):
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
             if z < -self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
+        elif holdings < 0:
+            if abs(z) < self.exit_z:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
+            if z > self.stop_z:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
         if holdings == 0:
             if z < -self.entry_z:
                 shares = self.calculate_position_size(current_price, capital_fraction=0.95)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
+            elif z > self.entry_z:
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                if shares > 0:
+                    return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}
 
@@ -128,10 +137,20 @@ class ZScoreReversionStrategy(BaseStrategy):
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
             if z < -self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
+        elif holdings < 0:
+            if abs(z) < self.exit_z:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
+            if z > self.stop_z:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
-        if holdings == 0 and z < -self.entry_z:
-            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
-            if shares > 0 and self.can_buy(symbol, current_price, shares):
-                return {"action": "buy", "symbol": symbol, "shares": shares}
+        if holdings == 0:
+            if z < -self.entry_z:
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                if shares > 0 and self.can_buy(symbol, current_price, shares):
+                    return {"action": "buy", "symbol": symbol, "shares": shares}
+            elif z > self.entry_z:
+                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                if shares > 0:
+                    return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}

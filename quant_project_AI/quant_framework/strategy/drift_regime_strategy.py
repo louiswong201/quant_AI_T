@@ -82,8 +82,8 @@ class DriftRegimeStrategy(BaseStrategy):
                 self._entry_bar[symbol] = -1
                 if holdings > 0:
                     return {"action": "sell", "symbol": symbol, "shares": holdings}
-                # 注意：框架暂不支持空头平仓（buy to cover），用 hold 代替
-                return {"action": "hold"}
+                elif holdings < 0:
+                    return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
         # 开仓信号
         if holdings == 0:
@@ -129,7 +129,8 @@ class DriftRegimeStrategy(BaseStrategy):
                 self._entry_bar[symbol] = -1
                 if holdings > 0:
                     return {"action": "sell", "symbol": symbol, "shares": holdings}
-                return {"action": "hold"}
+                elif holdings < 0:
+                    return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
         # 做多信号
         if holdings == 0 and up_ratio <= (1.0 - self.drift_threshold):
