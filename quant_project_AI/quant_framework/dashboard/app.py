@@ -9,6 +9,7 @@ Professional terminal-style dashboard focused on strategy clarity:
 
 from __future__ import annotations
 
+import math
 import threading
 from typing import Any, Callable, Dict, List
 
@@ -958,6 +959,7 @@ def create_app(
         daily = float(pnl_df.iloc[0]["daily_pnl"]) if not pnl_df.empty else 0.0
         wr = float(stats.get("win_rate", 0))
         pf = float(stats.get("profit_factor", 0))
+        pf_unbounded = bool(stats.get("profit_factor_unbounded", False))
         total_t = int(stats.get("total_trades", 0))
         kill_switch_active = bool(state.get("kill_switch_active", False))
         kill_switch_reason = str(state.get("kill_switch_reason", "") or "")
@@ -970,7 +972,15 @@ def create_app(
         eq_s = {"color": _BLUE, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
         dd_s = {"color": _RED if dd > 5 else (_AMBER if dd > 2 else _GREEN), "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
         wr_s = {"color": _GREEN if wr >= 50 else _RED, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
-        pf_s = {"color": _GREEN if pf >= 1 else _RED, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
+        pf_color = _GREEN if pf >= 1 else _RED
+        if pf_unbounded:
+            pf_color = _GREEN
+        pf_s = {"color": pf_color, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
+        if not math.isfinite(pf):
+            pf = 0.0
+        pf_text = f"{pf:.2f}x"
+        if pf_unbounded:
+            pf_text = f">{pf:.2f}x"
         tr_s = {"color": _CYAN, "fontSize": "1.18rem", "fontWeight": "700", "fontVariantNumeric": "tabular-nums"}
 
         dot_color = _RED if kill_switch_active else (_GREEN if running else _AMBER)
@@ -1017,7 +1027,7 @@ def create_app(
             dd_s,
             f"{wr:.1f}%",
             wr_s,
-            f"{pf:.2f}x",
+            pf_text,
             pf_s,
             str(total_t),
             tr_s,

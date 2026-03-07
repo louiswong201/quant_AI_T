@@ -377,6 +377,7 @@ def main() -> None:
         symbol_configs=symbol_configs,
         position_size_pct=pos_size,
     )
+    runner.restore_from_journal()
 
     # ── Dashboard ──
     if not args.no_dashboard:

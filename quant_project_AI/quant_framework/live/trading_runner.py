@@ -70,7 +70,7 @@ class TradingRunner:
         self._last_eq_snapshot = 0.0
         self._bar_count = 0
         self._tick_count = 0
-        self._entry_prices: Dict[str, float] = {}
+        self._entry_prices: Dict[str, tuple[float, float]] = {}
         self._live_prices: Dict[str, float] = {}
         self._sl_triggered: Dict[str, bool] = {}
         self._state_cache: Optional[Dict[str, Any]] = None
@@ -99,6 +99,7 @@ class TradingRunner:
         await self._feed.start_all(lookback=lookback)
 
         self._warmup_strategies()
+        self._sync_strategy_positions_to_broker()
 
         self._feed.on_bar(self._on_bar)
         self._feed.on_tick(self._on_tick)
@@ -188,7 +189,10 @@ class TradingRunner:
             pnl = 0.0
             positions = self._broker.get_positions()
             cur_qty = positions.get(symbol, 0)
+            prior_entry = self._entry_prices.get(symbol)
+            was_realized_close = False
             if sig["action"] == "buy":
+                was_realized_close = prior_entry is not None and prior_entry[1] < 0
                 if symbol in self._entry_prices and self._entry_prices[symbol][1] < 0:
                     entry, _ = self._entry_prices.pop(symbol)
                     pnl = (entry - fill_price) * filled_shares - commission
@@ -201,6 +205,7 @@ class TradingRunner:
                     avg = (old_entry * old_qty + fill_price * filled_shares) / (old_qty + filled_shares)
                     self._entry_prices[symbol] = (avg, cur_qty)
             elif sig["action"] == "sell":
+                was_realized_close = prior_entry is not None and prior_entry[1] > 0
                 if symbol in self._entry_prices and self._entry_prices[symbol][1] > 0:
                     entry, _ = self._entry_prices.pop(symbol)
                     pnl = (fill_price - entry) * filled_shares - commission
@@ -223,6 +228,7 @@ class TradingRunner:
                 commission=commission,
                 pnl=pnl,
                 strategy=sig.get("strategy", ""),
+                metadata={"realized": was_realized_close, "position_after": cur_qty},
             )
             logger.info(
                 "%s %s %s @ %.4f (%.0f shares, pnl=%.2f)",
@@ -328,6 +334,7 @@ class TradingRunner:
                 symbol=symbol, side=action, shares=filled,
                 price=fill_price, commission=commission, pnl=pnl,
                 strategy=f"tick_{reason}",
+                metadata={"realized": True, "position_after": 0.0},
             )
             logger.info(
                 "[TICK %s] %s %s @ %.4f (%.4f shares, pnl=%.2f, entry=%.4f)",
@@ -378,6 +385,55 @@ class TradingRunner:
             equity += shares * px
         self._journal.record_equity(equity=equity, cash=cash, positions=positions)
         self._last_eq_snapshot = time.time()
+
+    def _sync_strategy_positions_to_broker(self) -> None:
+        """Align adapter runtime states to the recovered broker book."""
+        positions = self._broker.get_positions()
+        for symbol, adapter in self._strategies.items():
+            qty = float(positions.get(symbol, 0.0))
+            direction = 1 if qty > 0 else (-1 if qty < 0 else 0)
+            if isinstance(adapter, MultiTFAdapter):
+                adapter.set_fused_position(direction)
+            else:
+                adapter.set_position(direction)
+
+    def restore_from_journal(self) -> Dict[str, Any]:
+        """Restore broker/account state from the persistent journal."""
+        fallback_initial = 100_000.0
+        inner = getattr(self._broker, "_broker", None)
+        if inner is not None:
+            fallback_initial = float(getattr(inner, "_initial_cash_stored", fallback_initial) or fallback_initial)
+        else:
+            fallback_initial = float(getattr(self._broker, "_initial_cash_stored", fallback_initial) or fallback_initial)
+
+        restored = self._journal.get_latest_account_state(fallback_initial_cash=fallback_initial)
+        if not restored.get("has_recovery_data"):
+            return restored
+
+        restore_target = inner if inner is not None else self._broker
+        restore_fn = getattr(restore_target, "restore_state", None)
+        if callable(restore_fn):
+            restore_fn(
+                cash=float(restored.get("cash", fallback_initial)),
+                positions=restored.get("positions", {}),
+                entry_prices=restored.get("entry_prices", {}),
+                initial_cash=float(restored.get("initial_cash", fallback_initial)),
+            )
+
+        self._entry_prices = {
+            sym: (float(price), float(restored["positions"][sym]))
+            for sym, price in restored.get("entry_prices", {}).items()
+            if sym in restored.get("positions", {})
+        }
+        self._sync_strategy_positions_to_broker()
+        self._invalidate_state_cache()
+        logger.info(
+            "Recovered account state: cash=%.2f positions=%d snapshot=%s",
+            float(restored.get("cash", 0.0)),
+            len(restored.get("positions", {})),
+            restored.get("snapshot_timestamp", "") or "n/a",
+        )
+        return restored
 
     def _shutdown(self) -> None:
         logger.info("Shutdown signal received")
@@ -449,6 +505,7 @@ class TradingRunner:
                     commission=commission,
                     pnl=pnl,
                     strategy="kill_switch",
+                    metadata={"realized": True, "position_after": 0.0},
                 )
                 self._entry_prices.pop(symbol, None)
                 self._sl_triggered.pop(symbol, None)

@@ -257,6 +257,7 @@ def main() -> None:
         bt_config=bt_config,
         position_size_pct=args.position_size,
     )
+    runner.restore_from_journal()
 
     if not args.no_dashboard:
         try:

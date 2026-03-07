@@ -6,6 +6,7 @@ Pure functions — no Dash dependency.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -37,6 +38,19 @@ _C = {
 }
 
 _FONT = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
+_PF_CAP = 99.99
+
+
+def _safe_pf(value: Any) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(out):
+        return _PF_CAP
+    if out < 0:
+        return 0.0
+    return min(out, _PF_CAP)
 
 _LAYOUT_BASE = dict(
     font=dict(family=_FONT, color=_C["text"], size=12),
@@ -693,7 +707,7 @@ def build_stats_panel(stats: Dict[str, Any]) -> go.Figure:
     ]
     values = [
         f'{stats.get("win_rate", 0):.1f}%',
-        f'{stats.get("profit_factor", 0):.2f}',
+        f'{_safe_pf(stats.get("profit_factor", 0)):.2f}',
         f'${stats.get("expectancy", 0):+,.2f}',
         f'${stats.get("avg_win", 0):,.2f}',
         f'${stats.get("avg_loss", 0):,.2f}',
@@ -704,7 +718,7 @@ def build_stats_panel(stats: Dict[str, Any]) -> go.Figure:
     ]
     val_colors = [
         _C["green"] if stats.get("win_rate", 0) >= 50 else _C["red"],
-        _C["green"] if stats.get("profit_factor", 0) >= 1 else _C["red"],
+        _C["green"] if _safe_pf(stats.get("profit_factor", 0)) >= 1 else _C["red"],
         _C["green"] if stats.get("expectancy", 0) >= 0 else _C["red"],
         _C["green"], _C["red"], _C["green"],
         _C["red"], _C["green"], _C["red"],
@@ -774,7 +788,7 @@ def build_strategy_leaderboard(
     sharpe = [f'{float(r.get("sharpe", 0.0)):.2f}' for r in sorted_rows]
     dd = [f'{float(r.get("max_drawdown_pct", 0.0)):.2f}%' for r in sorted_rows]
     wr = [f'{float(r.get("win_rate", 0.0)):.1f}%' for r in sorted_rows]
-    pf = [f'{float(r.get("profit_factor", 0.0)):.2f}' for r in sorted_rows]
+    pf = [f'{_safe_pf(r.get("profit_factor", 0.0)):.2f}' for r in sorted_rows]
     score = [f'{float(r.get("score", 0.0)):.1f}' for r in sorted_rows]
     trades = [str(int(r.get("trades", 0))) for r in sorted_rows]
 
@@ -843,7 +857,7 @@ def build_strategy_scorecard(row: Optional[Dict[str, Any]]) -> go.Figure:
     sharpe = float(row.get("sharpe", 0.0))
     dd = float(row.get("max_drawdown_pct", 0.0))
     wr = float(row.get("win_rate", 0.0))
-    pf = float(row.get("profit_factor", 0.0))
+    pf = _safe_pf(row.get("profit_factor", 0.0))
     stability = float(row.get("stability", 0.0))
 
     fig = go.Figure()
@@ -936,7 +950,7 @@ def build_strategy_compare(
     elif metric == "quality":
         fig.add_trace(go.Bar(name="Sharpe", x=x, y=[float(r.get("sharpe", 0.0)) for r in top],
                              marker_color=_C["cyan"]))
-        fig.add_trace(go.Bar(name="Profit Factor", x=x, y=[float(r.get("profit_factor", 0.0)) for r in top],
+        fig.add_trace(go.Bar(name="Profit Factor", x=x, y=[_safe_pf(r.get("profit_factor", 0.0)) for r in top],
                              marker_color=_C["amber"]))
         fig.add_trace(go.Bar(name="Win Rate / 10", x=x, y=[float(r.get("win_rate", 0.0)) / 10.0 for r in top],
                              marker_color=_C["blue"]))

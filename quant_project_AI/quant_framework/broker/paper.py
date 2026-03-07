@@ -178,6 +178,30 @@ class PaperBroker(Broker):
     def get_cash(self) -> float:
         return self._cash
 
+    def restore_state(
+        self,
+        *,
+        cash: float,
+        positions: Optional[Dict[str, PositionQty]] = None,
+        entry_prices: Optional[Dict[str, float]] = None,
+        initial_cash: Optional[float] = None,
+    ) -> None:
+        """Restore broker state from a persisted journal snapshot."""
+        self._cash = float(cash)
+        if initial_cash is not None:
+            self._initial_cash_stored = float(initial_cash)
+        self._positions = {
+            str(symbol): (float(qty) if self._allow_fractional else int(qty))
+            for symbol, qty in (positions or {}).items()
+            if abs(float(qty)) > 1e-12
+        }
+        self._entry_prices = {
+            str(symbol): float(price)
+            for symbol, price in (entry_prices or {}).items()
+            if str(symbol) in self._positions
+        }
+        self._orders = []
+
     def get_orders(self) -> List[Dict[str, Any]]:
         return copy.deepcopy(self._orders)
 

@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+_PF_CAP = 99.99
+_POS_EPS = 1e-12
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,22 +210,45 @@ class TradeJournal:
         self._flush()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT pnl FROM trades WHERE pnl IS NOT NULL"
+                "SELECT pnl, commission, metadata FROM trades WHERE pnl IS NOT NULL"
             ).fetchall()
-            comm_row = self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(pnl), 0), COALESCE(SUM(commission), 0) FROM trades"
-            ).fetchone()
         if not rows:
             return {
                 "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+                "breakeven_trades": 0,
                 "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
                 "largest_win": 0.0, "largest_loss": 0.0, "profit_factor": 0.0,
+                "profit_factor_unbounded": False, "profit_factor_capped": False,
                 "total_pnl": 0.0, "total_commission": 0.0,
                 "expectancy": 0.0, "win_streak": 0, "loss_streak": 0,
             }
-        pnls = [r[0] for r in rows]
+
+        realized_pnls: List[float] = []
+        realized_commissions: List[float] = []
+        for pnl, commission, metadata_raw in rows:
+            metadata = self._parse_metadata(metadata_raw)
+            realized = metadata.get("realized")
+            if realized is None:
+                realized = abs(float(pnl or 0.0)) > _POS_EPS
+            if realized:
+                realized_pnls.append(float(pnl or 0.0))
+                realized_commissions.append(float(commission or 0.0))
+
+        if not realized_pnls:
+            return {
+                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+                "breakeven_trades": 0,
+                "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
+                "largest_win": 0.0, "largest_loss": 0.0, "profit_factor": 0.0,
+                "profit_factor_unbounded": False, "profit_factor_capped": False,
+                "total_pnl": 0.0, "total_commission": 0.0,
+                "expectancy": 0.0, "win_streak": 0, "loss_streak": 0,
+            }
+
+        pnls = realized_pnls
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
+        breakeven = [p for p in pnls if abs(p) <= _POS_EPS]
 
         max_w_streak, max_l_streak, cur_w, cur_l = 0, 0, 0, 0
         for p in pnls:
@@ -230,25 +256,41 @@ class TradeJournal:
                 cur_w += 1
                 cur_l = 0
                 max_w_streak = max(max_w_streak, cur_w)
-            else:
+            elif p < 0:
                 cur_l += 1
                 cur_w = 0
                 max_l_streak = max(max_l_streak, cur_l)
+            else:
+                cur_w = 0
+                cur_l = 0
 
         total_win = sum(wins) if wins else 0.0
         total_loss = abs(sum(losses)) if losses else 0.0
-        total_trades, total_pnl, total_commission = comm_row or (0, 0.0, 0.0)
+        total_trades = len(pnls)
+        total_pnl = float(sum(pnls))
+        total_commission = float(sum(realized_commissions))
+        pf_unbounded = total_loss <= 1e-12 and total_win > 0
+        if total_loss > 1e-12:
+            pf_raw = total_win / total_loss
+            profit_factor = min(pf_raw, _PF_CAP)
+            pf_capped = pf_raw > _PF_CAP
+        else:
+            profit_factor = _PF_CAP if total_win > 0 else 0.0
+            pf_capped = pf_unbounded
 
         return {
             "total_trades": total_trades,
             "winning_trades": len(wins),
             "losing_trades": len(losses),
-            "win_rate": len(wins) / len(pnls) * 100 if pnls else 0.0,
+            "breakeven_trades": len(breakeven),
+            "win_rate": len(wins) / (len(wins) + len(losses)) * 100 if (len(wins) + len(losses)) else 0.0,
             "avg_win": total_win / len(wins) if wins else 0.0,
             "avg_loss": -total_loss / len(losses) if losses else 0.0,
             "largest_win": max(wins) if wins else 0.0,
             "largest_loss": min(losses) if losses else 0.0,
-            "profit_factor": total_win / total_loss if total_loss > 0 else float("inf"),
+            "profit_factor": profit_factor,
+            "profit_factor_unbounded": pf_unbounded,
+            "profit_factor_capped": pf_capped,
             "total_pnl": total_pnl,
             "total_commission": total_commission,
             "expectancy": sum(pnls) / len(pnls) if pnls else 0.0,
@@ -260,12 +302,23 @@ class TradeJournal:
         """Aggregate strategy-level performance from recent realized trades."""
         self._flush()
         q = (
-            "SELECT timestamp, symbol, strategy, pnl "
-            "FROM trades WHERE pnl != 0 AND strategy != '' "
+            "SELECT timestamp, symbol, strategy, pnl, metadata "
+            "FROM trades WHERE pnl IS NOT NULL AND strategy != '' "
             "ORDER BY id DESC LIMIT ?"
         )
         with self._lock:
             df = pd.read_sql_query(q, self._conn, params=[limit])
+        if df.empty:
+            return []
+
+        df["metadata"] = df["metadata"].apply(self._parse_metadata)
+        df["realized"] = df.apply(
+            lambda row: row["metadata"].get("realized")
+            if row["metadata"].get("realized") is not None
+            else abs(float(row["pnl"] or 0.0)) > _POS_EPS,
+            axis=1,
+        )
+        df = df[df["realized"]].copy()
         if df.empty:
             return []
 
@@ -280,7 +333,10 @@ class TradeJournal:
             win_rate = float((len(wins) / trades) * 100.0) if trades else 0.0
             total_win = float(wins.sum()) if len(wins) else 0.0
             total_loss_abs = float(abs(losses.sum())) if len(losses) else 0.0
-            pf = (total_win / total_loss_abs) if total_loss_abs > 1e-12 else float("inf")
+            if total_loss_abs > 1e-12:
+                pf = min(total_win / total_loss_abs, _PF_CAP)
+            else:
+                pf = _PF_CAP if total_win > 0 else 0.0
             expectancy = float(total_pnl / trades) if trades else 0.0
             std = float(pnl.std(ddof=0)) if trades > 1 else 0.0
             sharpe_proxy = float((expectancy / std) * (trades ** 0.5)) if std > 1e-12 else 0.0
@@ -304,6 +360,127 @@ class TradeJournal:
                 if not grp_sorted.empty else "",
             })
         return rows
+
+    @staticmethod
+    def _parse_metadata(raw: Any) -> Dict[str, Any]:
+        if not raw:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _normalize_positions(raw: Any) -> Dict[str, float]:
+        if not raw:
+            return {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {}
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, float] = {}
+        for symbol, qty in raw.items():
+            try:
+                val = float(qty)
+            except (TypeError, ValueError):
+                continue
+            if abs(val) > _POS_EPS:
+                out[str(symbol)] = val
+        return out
+
+    def get_latest_account_state(self, fallback_initial_cash: float = 100_000.0) -> Dict[str, Any]:
+        """Best-effort recovery of broker cash/positions/entry prices from journal."""
+        self._flush()
+        with self._lock:
+            first_snapshot = self._conn.execute(
+                "SELECT cash FROM equity_snapshots ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+            latest_snapshot = self._conn.execute(
+                "SELECT timestamp, equity, cash, positions FROM equity_snapshots ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            trades = self._conn.execute(
+                "SELECT symbol, side, shares, price, commission FROM trades ORDER BY id ASC"
+            ).fetchall()
+
+        initial_cash = float(first_snapshot[0]) if first_snapshot and first_snapshot[0] is not None else float(fallback_initial_cash)
+        replay_cash = initial_cash
+        replay_positions: Dict[str, float] = {}
+        replay_entries: Dict[str, float] = {}
+
+        for symbol, side, shares, price, commission in trades:
+            sym = str(symbol)
+            action = str(side).lower()
+            qty = float(shares or 0.0)
+            px = float(price or 0.0)
+            comm = float(commission or 0.0)
+            if not sym or qty <= 0 or action not in {"buy", "sell"}:
+                continue
+
+            if action == "buy":
+                replay_cash -= px * qty + comm
+                old_pos = replay_positions.get(sym, 0.0)
+                new_pos = old_pos + qty
+                if old_pos < 0 and new_pos > 0:
+                    replay_entries[sym] = px
+                elif old_pos < 0 and abs(new_pos) <= _POS_EPS:
+                    replay_entries.pop(sym, None)
+                elif old_pos <= 0 and new_pos > 0:
+                    replay_entries[sym] = px
+                elif old_pos > 0:
+                    old_entry = replay_entries.get(sym, px)
+                    replay_entries[sym] = (old_entry * old_pos + px * qty) / new_pos
+            else:
+                replay_cash += px * qty - comm
+                old_pos = replay_positions.get(sym, 0.0)
+                new_pos = old_pos - qty
+                if old_pos > 0 and new_pos <= 0:
+                    replay_entries.pop(sym, None)
+                    if new_pos < 0:
+                        replay_entries[sym] = px
+                elif old_pos <= 0 and new_pos < 0:
+                    old_entry = replay_entries.get(sym, px)
+                    replay_entries[sym] = ((old_entry * abs(old_pos)) + (px * qty)) / abs(new_pos)
+
+            if abs(new_pos) <= _POS_EPS:
+                replay_positions.pop(sym, None)
+                replay_entries.pop(sym, None)
+            else:
+                replay_positions[sym] = new_pos
+
+        if latest_snapshot:
+            snapshot_positions = self._normalize_positions(latest_snapshot[3])
+            snapshot_cash = float(latest_snapshot[2] or replay_cash)
+            positions = snapshot_positions or replay_positions
+            cash = snapshot_cash
+            timestamp = str(latest_snapshot[0] or "")
+            equity = float(latest_snapshot[1] or cash)
+        else:
+            positions = replay_positions
+            cash = replay_cash
+            timestamp = ""
+            equity = cash
+
+        entry_prices = {
+            sym: float(replay_entries[sym])
+            for sym, qty in positions.items()
+            if sym in replay_entries and abs(qty) > _POS_EPS
+        }
+
+        return {
+            "initial_cash": initial_cash,
+            "cash": cash,
+            "equity": equity,
+            "positions": positions,
+            "entry_prices": entry_prices,
+            "snapshot_timestamp": timestamp,
+            "has_recovery_data": bool(latest_snapshot or trades),
+        }
 
     def get_summary(self) -> Dict[str, Any]:
         self._flush()

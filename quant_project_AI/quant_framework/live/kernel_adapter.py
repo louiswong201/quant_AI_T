@@ -172,6 +172,10 @@ class KernelAdapter:
         """Current kernel position: +1 long, -1 short, 0 flat."""
         return self._prev_position
 
+    def set_position(self, position: int) -> None:
+        """Force the runtime position state to a recovered value."""
+        self._prev_position = 1 if position > 0 else (-1 if position < 0 else 0)
+
 
 # ── Multi-Timeframe Adapter ──────────────────────────────────────────
 
@@ -233,6 +237,10 @@ class MultiTFAdapter:
     def fused_position(self) -> int:
         """Current fused (consensus / trend_filter / primary) position."""
         return self._prev_fused_position
+
+    def set_fused_position(self, position: int) -> None:
+        """Force the fused runtime position to a recovered value."""
+        self._prev_fused_position = 1 if position > 0 else (-1 if position < 0 else 0)
 
     @property
     def tf_strategies(self) -> Dict[str, str]:
