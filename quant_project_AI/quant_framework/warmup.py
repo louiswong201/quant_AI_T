@@ -68,17 +68,9 @@ def _make_tiny_data(n: int = 200):
 
 def _is_cache_complete() -> bool:
     """Check if both kernel AND robustness caches exist on disk."""
-    custom = os.environ.get("NUMBA_CACHE_DIR")
-    if custom:
-        cache_dir = Path(custom)
-    else:
-        cache_dir = Path(__file__).parent / "backtest" / "__pycache__"
+    from .platform_config import check_numba_cache
 
-    if not cache_dir.is_dir():
-        return False
-    has_kernels = any(cache_dir.glob("kernels.*.nbi"))
-    has_robust = any(cache_dir.glob("robust_scan.*.nbi"))
-    return has_kernels and has_robust
+    return check_numba_cache(full=True, log_missing=False)
 
 
 def _full_warmup(verbose: bool = True) -> None:

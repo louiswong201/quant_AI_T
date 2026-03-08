@@ -89,11 +89,17 @@ class DriftRegimeStrategy(BaseStrategy):
         if holdings == 0:
             if up_ratio <= (1.0 - self.drift_threshold):
                 # 漂移过低 → 做多（反转上涨）
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     self._entry_bar[symbol] = i
                     self._hold_count[symbol] = 0
                     return {"action": "buy", "symbol": symbol, "shares": shares}
+            elif up_ratio >= self.drift_threshold:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                if shares > 0 and self.can_sell(symbol, shares):
+                    self._entry_bar[symbol] = i
+                    self._hold_count[symbol] = 0
+                    return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}
 
@@ -134,10 +140,16 @@ class DriftRegimeStrategy(BaseStrategy):
 
         # 做多信号
         if holdings == 0 and up_ratio <= (1.0 - self.drift_threshold):
-            shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+            shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
             if shares > 0 and self.can_buy(symbol, current_price, shares):
                 self._entry_bar[symbol] = n - 1
                 self._hold_count[symbol] = 0
                 return {"action": "buy", "symbol": symbol, "shares": shares}
+        elif holdings == 0 and up_ratio >= self.drift_threshold:
+            shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+            if shares > 0 and self.can_sell(symbol, shares):
+                self._entry_bar[symbol] = n - 1
+                self._hold_count[symbol] = 0
+                return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}

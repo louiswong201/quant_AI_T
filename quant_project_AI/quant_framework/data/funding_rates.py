@@ -48,6 +48,14 @@ class FundingRateLoader:
             except Exception as e:
                 logger.warning("Funding rate fetch failed: %s", e)
                 break
+            try:
+                if isinstance(data, dict) and "code" in data:
+                    raise ValueError(f"API error: {data}")
+                if not isinstance(data, list):
+                    raise ValueError(f"Expected list, got {type(data)}")
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Invalid funding rate response: %s", e)
+                return pd.DataFrame()
             if not data:
                 break
             for r in data:

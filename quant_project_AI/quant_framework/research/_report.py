@@ -134,6 +134,8 @@ def _section_regime_map(lines: list, monitor_results: List[Dict[str, Any]]):
             continue
         seen.add(sym)
         reg = r["regime"]
+        if not reg:
+            continue
         dominant = max(reg, key=reg.get)
         lines.append(
             f"| {sym} | {reg.get('trending', 0):.0%} | {reg.get('mean_reverting', 0):.0%} | "

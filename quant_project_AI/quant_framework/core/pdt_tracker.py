@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 
 
 class PDTTracker:
-    """Pattern Day Trader: equity < 25k and 3+ day trades in 5 trading days -> violation."""
+    """Pattern Day Trader: equity < 25k and 4+ day trades in 5 business days -> violation."""
 
     def __init__(self, equity_threshold: float = 25_000) -> None:
         self._threshold = equity_threshold
@@ -22,7 +22,7 @@ class PDTTracker:
     def would_violate(self, equity: float, current_date: date) -> bool:
         if equity >= self._threshold:
             return False
-        return self.day_trade_count(current_date) >= 3
+        return self.day_trade_count(current_date) >= 4
 
     def _cleanup_old(self, current_date: date) -> None:
         cutoff = current_date - timedelta(days=7)

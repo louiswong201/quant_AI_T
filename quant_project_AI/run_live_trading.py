@@ -91,8 +91,15 @@ def load_best_per_symbol(
     ``cpcv_only`` drops non-CPCV-validated single-TF recommendations.
     ``top_n`` keeps at most N symbols (by rank order of first appearance).
     """
-    with open(config_path) as f:
-        cfg = json.load(f)
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: Config file not found: {config_path}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in {config_path}: {e}")
+        return {}
 
     best: Dict[str, Dict[str, Any]] = {}
     for rec in cfg["recommendations"]:
@@ -356,16 +363,17 @@ def main() -> None:
     first_fsym = next(iter(strategies))
     default_cfg = symbol_configs.get(first_fsym, broker_cfg)
 
-    # Override position_size_pct with portfolio weights if available
     pos_size = args.position_size
+    symbol_size_map: Dict[str, float] = {}
     if portfolio_weights:
-        first_config_sym = next(iter(best))
-        pw = portfolio_weights.get(first_config_sym, args.position_size)
-        if pw > 0:
-            pos_size = pw
+        for config_sym in best:
+            feed_sym = to_feed_symbol(config_sym)
+            pw = portfolio_weights.get(config_sym, args.position_size)
+            if pw > 0:
+                symbol_size_map[feed_sym] = pw
         logger.info(
-            "Using portfolio-weighted position sizes (base=%.2f%%, per-symbol overrides available)",
-            pos_size * 100,
+            "Using portfolio-weighted position sizes (base=%.2f%%, %d per-symbol overrides)",
+            pos_size * 100, len(symbol_size_map),
         )
 
     runner = TradingRunner(
@@ -376,6 +384,7 @@ def main() -> None:
         bt_config=default_cfg,
         symbol_configs=symbol_configs,
         position_size_pct=pos_size,
+        symbol_size_overrides=symbol_size_map,
     )
     runner.restore_from_journal()
 

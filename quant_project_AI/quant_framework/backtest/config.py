@@ -149,8 +149,8 @@ class BacktestConfig:
             raise ValueError(f"impact_vol_ref must be > 0, got {self.impact_vol_ref}")
         if self.stop_loss_pct is not None and not (0.0 < self.stop_loss_pct <= 1.0):
             raise ValueError(f"stop_loss_pct must be in (0, 1], got {self.stop_loss_pct}")
-        if self.take_profit_pct is not None and self.take_profit_pct <= 0:
-            raise ValueError(f"take_profit_pct must be > 0, got {self.take_profit_pct}")
+        if self.take_profit_pct is not None and self.take_profit_pct < 0:
+            raise ValueError(f"take_profit_pct must be >= 0 (0 = no take profit), got {self.take_profit_pct}")
         if self.trailing_stop_pct is not None and not (0.0 < self.trailing_stop_pct <= 1.0):
             raise ValueError(f"trailing_stop_pct must be in (0, 1], got {self.trailing_stop_pct}")
         if not (0.0 < self.position_fraction <= 1.0):

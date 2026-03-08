@@ -6,8 +6,8 @@ Z-Score 均值回归策略
   价格偏离均值的标准差程度 (z-score) 超过阈值时，预期价格回归均值。
   z < -entry_z → 做多 (超跌反弹)
   z > +entry_z → 做空 (超涨回落)
-  |z| < exit_z → 平仓 (回归均值完成)
-  |z| > stop_z → 止损 (趋势突破)
+  long exit:  z > -exit_z OR z > stop_z  (z-score 回归到 -exit_z 以上即平仓)
+  short exit: z < exit_z  OR z < -stop_z (z-score 回归到 exit_z 以下即平仓)
 """
 
 import numpy as np
@@ -88,24 +88,20 @@ class ZScoreReversionStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         if holdings > 0:
-            if abs(z) < self.exit_z:
-                return {"action": "sell", "symbol": symbol, "shares": holdings}
-            if z < -self.stop_z:
+            if z > -self.exit_z or z > self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
         elif holdings < 0:
-            if abs(z) < self.exit_z:
-                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
-            if z > self.stop_z:
+            if z < self.exit_z or z < -self.stop_z:
                 return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
         if holdings == 0:
             if z < -self.entry_z:
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
             elif z > self.entry_z:
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
-                if shares > 0:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                if shares > 0 and self.can_sell(symbol, shares):
                     return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}
@@ -133,24 +129,20 @@ class ZScoreReversionStrategy(BaseStrategy):
         holdings = self.positions.get(symbol, 0)
 
         if holdings > 0:
-            if abs(z) < self.exit_z:
-                return {"action": "sell", "symbol": symbol, "shares": holdings}
-            if z < -self.stop_z:
+            if z > -self.exit_z or z > self.stop_z:
                 return {"action": "sell", "symbol": symbol, "shares": holdings}
         elif holdings < 0:
-            if abs(z) < self.exit_z:
-                return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
-            if z > self.stop_z:
+            if z < self.exit_z or z < -self.stop_z:
                 return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
 
         if holdings == 0:
             if z < -self.entry_z:
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
             elif z > self.entry_z:
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
-                if shares > 0:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                if shares > 0 and self.can_sell(symbol, shares):
                     return {"action": "sell", "symbol": symbol, "shares": shares}
 
         return {"action": "hold"}

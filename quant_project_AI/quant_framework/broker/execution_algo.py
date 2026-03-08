@@ -81,8 +81,11 @@ class LimitChase(ExecutionAlgo):
         tick_size: float = 0.01,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        if tick_size <= 0:
+            raise ValueError("tick_size must be positive")
+        max_iterations = min(self._max_retries, 1000)
         current_price = price
-        for _ in range(self._max_retries):
+        for _ in range(max_iterations):
             signal = {
                 "symbol": symbol,
                 "action": side.lower(),
@@ -130,7 +133,13 @@ class Iceberg(ExecutionAlgo):
         )
         remaining = total_qty
         filled_total = 0.0
-        while remaining > 1e-10:
+        max_iterations = 1000
+        iterations = 0
+        while remaining > 1e-8:
+            iterations += 1
+            if iterations > max_iterations:
+                logger.warning("Iceberg: max iterations (%d) exceeded, breaking", max_iterations)
+                break
             qty = min(display_qty, remaining)
             signal = {
                 "symbol": symbol,

@@ -262,15 +262,19 @@ def build_candlestick_chart(
         ts_col = "timestamp" if "timestamp" in trades_df.columns else trades_df.columns[0]
         trades_df = trades_df.copy()
         trades_df[ts_col] = pd.to_datetime(trades_df[ts_col], errors="coerce", utc=True)
-        
-        # Map trade timestamps to x_data indices
+        trades_df = trades_df.dropna(subset=[ts_col])
+
+        if "side" not in trades_df.columns:
+            trades_df["side"] = ""
+        trades_df["side"] = trades_df["side"].astype(str).str.lower()
+
         trade_indices = []
         for trade_time in trades_df[ts_col]:
             idx = (ohlcv_df[date_col] - trade_time).abs().idxmin()
             trade_indices.append(idx)
-        
+
         trades_df["x_idx"] = trade_indices
-        
+
         buys = trades_df[trades_df["side"] == "buy"]
         sells = trades_df[trades_df["side"] == "sell"]
         
@@ -518,8 +522,13 @@ def build_trade_log_table(trades_df: pd.DataFrame) -> go.Figure:
     df = trades_df.head(50).copy()
     ts_col = "timestamp" if "timestamp" in df.columns else df.columns[0]
 
-    sides = df.get("side", pd.Series(dtype=str)).tolist()
-    pnl_vals = df.get("pnl", pd.Series(dtype=float)).tolist()
+    if "side" not in df.columns:
+        df["side"] = ""
+    if "pnl" not in df.columns:
+        df["pnl"] = 0.0
+
+    sides = df["side"].astype(str).str.lower().tolist()
+    pnl_vals = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0).tolist()
 
     row_colors = []
     side_font = []

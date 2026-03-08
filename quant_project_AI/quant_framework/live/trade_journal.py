@@ -88,39 +88,44 @@ class TradeJournal:
 
     def _maybe_flush(self) -> None:
         """Flush pending writes if the buffer or timer threshold is reached."""
-        total = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
-        elapsed = time.monotonic() - self._last_flush
-        if total == 0:
-            return
-        if total < self._FLUSH_SIZE and elapsed < self._FLUSH_INTERVAL:
-            return
-        self._flush()
+        with self._lock:
+            total = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
+            if total == 0:
+                return
+            elapsed = time.monotonic() - self._last_flush
+            if total < self._FLUSH_SIZE and elapsed < self._FLUSH_INTERVAL:
+                return
+            self._flush_unlocked()
 
     def _flush(self) -> None:
         """Flush all pending writes to SQLite in a single transaction."""
         with self._lock:
-            if self._trade_buf:
-                self._conn.executemany(
-                    "INSERT INTO trades (timestamp, symbol, side, shares, price, "
-                    "commission, pnl, strategy, metadata) VALUES (?,?,?,?,?,?,?,?,?)",
-                    self._trade_buf,
-                )
-                self._trade_buf.clear()
-            if self._equity_buf:
-                self._conn.executemany(
-                    "INSERT INTO equity_snapshots (timestamp, equity, cash, positions) "
-                    "VALUES (?,?,?,?)",
-                    self._equity_buf,
-                )
-                self._equity_buf.clear()
-            if self._signal_buf:
-                self._conn.executemany(
-                    "INSERT INTO signals (timestamp, symbol, strategy, signal_type, params) "
-                    "VALUES (?,?,?,?,?)",
-                    self._signal_buf,
-                )
-                self._signal_buf.clear()
-            self._conn.commit()
+            self._flush_unlocked()
+
+    def _flush_unlocked(self) -> None:
+        """Flush all pending writes to SQLite. Caller must hold self._lock."""
+        if self._trade_buf:
+            self._conn.executemany(
+                "INSERT INTO trades (timestamp, symbol, side, shares, price, "
+                "commission, pnl, strategy, metadata) VALUES (?,?,?,?,?,?,?,?,?)",
+                self._trade_buf,
+            )
+            self._trade_buf.clear()
+        if self._equity_buf:
+            self._conn.executemany(
+                "INSERT INTO equity_snapshots (timestamp, equity, cash, positions) "
+                "VALUES (?,?,?,?)",
+                self._equity_buf,
+            )
+            self._equity_buf.clear()
+        if self._signal_buf:
+            self._conn.executemany(
+                "INSERT INTO signals (timestamp, symbol, strategy, signal_type, params) "
+                "VALUES (?,?,?,?,?)",
+                self._signal_buf,
+            )
+            self._signal_buf.clear()
+        self._conn.commit()
         self._last_flush = time.monotonic()
 
     def record_trade(

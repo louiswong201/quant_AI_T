@@ -49,6 +49,8 @@ class IBKRBroker(Broker):
             self._ib.disconnect()
 
     async def submit_order_async(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        if self._ib is None:
+            raise RuntimeError("IBKR broker not connected. Call connect() first.")
         symbol = str(signal.get("symbol", ""))
         action = str(signal.get("action", "")).lower()
         shares = int(float(signal.get("shares", 0)))
@@ -97,6 +99,8 @@ class IBKRBroker(Broker):
         return loop.run_until_complete(self.submit_order_async(signal))
 
     async def cancel_order_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        if self._ib is None:
+            raise RuntimeError("IBKR broker not connected. Call connect() first.")
         for trade in self._ib.openTrades():
             if str(trade.order.orderId) == order_id:
                 self._ib.cancelOrder(trade.order)

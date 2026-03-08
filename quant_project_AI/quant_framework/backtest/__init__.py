@@ -690,7 +690,7 @@ def backtest_multi_tf(
         costs["dc"], costs["sl"], costs["pfrac"], costs["sl_slip"],
     )
 
-    bpy = costs.get("bars_per_year", 252.0)
+    bpy = getattr(config, "bars_per_year", None) or costs.get("bars_per_year", 252.0)
     bar_rets = np.diff(equity) / np.maximum(equity[:-1], 1e-10)
     if len(bar_rets) > 1:
         mu = float(np.mean(bar_rets))

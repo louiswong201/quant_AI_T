@@ -1937,7 +1937,7 @@ def _eq_multifactor(c, o, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, sl, 
             s2=0.0
             for j in range(vol_p):
                 ret=(c[i-j]/c[i-j-1]-1.0) if i-j>0 and c[i-j-1]>0 else 0.0; s2+=ret*ret
-            vs=max(0.0,1.0-np.sqrt(s2/vol_p)*20.0); comp=(rs+ms+vs)/3.0
+            vs=max(0.0,1.0-np.sqrt(s2/max(1,vol_p))*20.0); comp=(rs+ms+vs)/3.0
             if pos==0:
                 if comp>lt: pend=1
                 elif comp<st: pend=-1
@@ -2729,7 +2729,7 @@ def eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.
         return bt_consensus_ls(c, o, _rolling_mean(c, ms_), _rolling_mean(c, ml_),
                                _rsi_wilder(c, rp_), int(p[3]), float(p[4]), float(p[5]),
                                int(p[6]), sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-    return (0.0, 0.0, 0)
+    raise ValueError(f"Unknown strategy: {name}")
 
 
 # =====================================================================

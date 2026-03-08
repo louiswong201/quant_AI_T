@@ -263,7 +263,8 @@ def evaluate_promotion(
     for ch in challengers:
         if ch["kernel_name"] != strategy:
             continue
-        if ch.get("symbols") and symbol not in ch["symbols"]:
+        ch_symbols = ch.get("symbols") or []
+        if symbol not in ch_symbols:
             continue
         ch_gate = ch.get("gate_score", 0)
         if ch_gate >= current_gate + promotion_threshold:
@@ -280,6 +281,23 @@ def evaluate_promotion(
     return None
 
 
+def _champion_name_for(db: ResearchDB, promotion: Dict[str, Any]) -> Optional[str]:
+    """Find the current LIVE champion name for this symbol/strategy (excluding challenger)."""
+    symbol = promotion["symbol"]
+    strategy = promotion["strategy"]
+    challenger_name = promotion["challenger_name"]
+    live = db.get_strategies_by_status("LIVE")
+    for s in live:
+        if s["kernel_name"] != strategy:
+            continue
+        ch_symbols = s.get("symbols") or []
+        if symbol not in ch_symbols:
+            continue
+        if s["name"] != challenger_name:
+            return s["name"]
+    return None
+
+
 def promote_challenger(
     db: ResearchDB,
     promotion: Dict[str, Any],
@@ -289,6 +307,10 @@ def promote_challenger(
     name = promotion["challenger_name"]
     strategy = promotion["strategy"]
     db.update_strategy_status(name, strategy, "LIVE")
+    # Demote old champion to RETIRED
+    old_champion_name = _champion_name_for(db, promotion)
+    if old_champion_name:
+        db.update_strategy_status(old_champion_name, strategy, "RETIRED")
 
     diff = {
         "symbol": promotion["symbol"],
@@ -369,7 +391,7 @@ def run_optimizer(
                 cfg = BacktestConfig.crypto(leverage=leverage, stop_loss_pct=sl, interval=interval)
             else:
                 cfg = BacktestConfig.stock_ibkr(leverage=leverage, stop_loss_pct=sl, interval=interval)
-            bpy = {"1d": 252, "4h": 1512, "1h": 6048}.get(interval, 252)
+            bpy = int(cfg.bars_per_year)
             neighborhood = param_neighborhood_stability(
                 strategy, blended, ds, cfg, bars_per_year=bpy,
             )
@@ -393,6 +415,8 @@ def run_optimizer(
         promotion = None
         if cur and register_challengers and gate >= 0.6:
             cur_metrics = cur.get("backtest_metrics", {})
+            if "oos_dd" not in cur_metrics and "max_dd" in cur_metrics:
+                cur_metrics = {**cur_metrics, "oos_dd": cur_metrics["max_dd"]}
             cur_gate_approx = composite_gate_score(cur_metrics)
             if gate > cur_gate_approx:
                 register_challenger(

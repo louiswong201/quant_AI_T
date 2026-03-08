@@ -74,29 +74,30 @@ class RSIStrategy(BaseStrategy):
             rsi = self.calculate_rsi(df["close"], self.rsi_period)
         current_price = float(df["close"].iloc[-1])
         
-        # RSI低于超卖阈值，买入
+        holdings = self.positions.get(symbol, 0)
+
         if rsi < self.oversold:
-            holdings = self.positions.get(symbol, 0)
-            if holdings == 0:  # 没有持仓时才买入
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+            if holdings == 0:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
-                    return {
-                        'action': 'buy',
-                        'symbol': symbol,
-                        'shares': shares
-                    }
-        
-        # RSI高于超买阈值，卖出
+                    return {"action": "buy", "symbol": symbol, "shares": shares}
+            elif holdings < 0:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings),
+                        "flip": True}
         elif rsi > self.overbought:
-            holdings = self.positions.get(symbol, 0)
-            if holdings > 0:
-                return {
-                    'action': 'sell',
-                    'symbol': symbol,
-                    'shares': holdings
-                }
-        
-        return {'action': 'hold'}
+            if holdings == 0:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                if shares > 0 and self.can_sell(symbol, shares):
+                    return {"action": "sell", "symbol": symbol, "shares": shares}
+            elif holdings > 0:
+                return {"action": "sell", "symbol": symbol, "shares": holdings,
+                        "flip": True}
+        elif holdings > 0 and rsi > 50:
+            return {"action": "sell", "symbol": symbol, "shares": holdings}
+        elif holdings < 0 and rsi < 50:
+            return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
+
+        return {"action": "hold"}
 
     def on_bar_fast(
         self,
@@ -122,16 +123,26 @@ class RSIStrategy(BaseStrategy):
             return {"action": "hold"}
 
         current_price = float(close[i])
+        holdings = self.positions.get(symbol, 0)
+
         if rsi < self.oversold:
-            holdings = self.positions.get(symbol, 0)
             if holdings == 0:
-                shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                 if shares > 0 and self.can_buy(symbol, current_price, shares):
                     return {"action": "buy", "symbol": symbol, "shares": shares}
+            elif holdings < 0:
+                return {"action": "buy", "symbol": symbol, "shares": abs(holdings), "flip": True}
         elif rsi > self.overbought:
-            holdings = self.positions.get(symbol, 0)
-            if holdings > 0:
-                return {"action": "sell", "symbol": symbol, "shares": holdings}
+            if holdings == 0:
+                shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                if shares > 0 and self.can_sell(symbol, shares):
+                    return {"action": "sell", "symbol": symbol, "shares": shares}
+            elif holdings > 0:
+                return {"action": "sell", "symbol": symbol, "shares": holdings, "flip": True}
+        elif holdings > 0 and rsi > 50:
+            return {"action": "sell", "symbol": symbol, "shares": holdings}
+        elif holdings < 0 and rsi < 50:
+            return {"action": "buy", "symbol": symbol, "shares": abs(holdings)}
         return {"action": "hold"}
 
     @staticmethod
@@ -168,14 +179,24 @@ class RSIStrategy(BaseStrategy):
             if pd.isna(rsi):
                 continue
             current_price = float(close[i])
+            holdings = self.positions.get(symbol, 0)
+
             if rsi < self.oversold:
-                holdings = self.positions.get(symbol, 0)
                 if holdings == 0:
-                    shares = self.calculate_position_size(current_price, capital_fraction=0.95)
+                    shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
                     if shares > 0 and self.can_buy(symbol, current_price, shares):
                         signals.append({"action": "buy", "symbol": symbol, "shares": shares})
+                elif holdings < 0:
+                    signals.append({"action": "buy", "symbol": symbol, "shares": abs(holdings), "flip": True})
             elif rsi > self.overbought:
-                holdings = self.positions.get(symbol, 0)
-                if holdings > 0:
-                    signals.append({"action": "sell", "symbol": symbol, "shares": holdings})
-        return signals or {"action": "hold"}
+                if holdings == 0:
+                    shares = self.calculate_position_size(current_price, capital_fraction=self._capital_fraction)
+                    if shares > 0 and self.can_sell(symbol, shares):
+                        signals.append({"action": "sell", "symbol": symbol, "shares": shares})
+                elif holdings > 0:
+                    signals.append({"action": "sell", "symbol": symbol, "shares": holdings, "flip": True})
+            elif holdings > 0 and rsi > 50:
+                signals.append({"action": "sell", "symbol": symbol, "shares": holdings})
+            elif holdings < 0 and rsi < 50:
+                signals.append({"action": "buy", "symbol": symbol, "shares": abs(holdings)})
+        return signals or [{"action": "hold"}]

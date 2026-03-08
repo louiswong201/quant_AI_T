@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
 from typing import Deque, Tuple
@@ -14,16 +15,21 @@ class RateLimiter:
         self._window = window_seconds
         self._used: Deque[Tuple[float, int]] = deque()
         self._running_total = 0
+        self._lock = threading.Lock()
+
+    def check(self, weight: int = 1) -> bool:
+        """Thread-safe check-and-append. Returns True if request allowed, False if rate limited."""
+        with self._lock:
+            now = time.monotonic()
+            self._used = deque((t, w) for t, w in self._used if now - t < self._window)
+            self._running_total = sum(w for _, w in self._used)
+            if self._running_total + weight > self._max_weight:
+                return False
+            self._used.append((now, weight))
+            self._running_total += weight
+            return True
 
     async def acquire(self, weight: int = 1) -> None:
-        while self._current_usage() + weight > self._max_weight:
+        """Block until a request slot is available, then add it atomically."""
+        while not self.check(weight):
             await asyncio.sleep(0.05)
-        self._used.append((time.time(), weight))
-        self._running_total += weight
-
-    def _current_usage(self) -> int:
-        now = time.time()
-        while self._used and now - self._used[0][0] > self._window:
-            _, w = self._used.popleft()
-            self._running_total -= w
-        return self._running_total

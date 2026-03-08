@@ -149,7 +149,7 @@ def test_strategy_fixes():
     # --- E.5/E.7: BaseStrategy capital_fraction ---
     from quant_framework.strategy.base_strategy import BaseStrategy
     check("E.7-base-capital-fraction-attr",
-          hasattr(BaseStrategy, '_capital_fraction') or True,
+          hasattr(BaseStrategy, '_capital_fraction'),
           "BaseStrategy should accept capital_fraction param")
 
     _section_times["A_strategy"] = time.perf_counter() - t0
@@ -248,10 +248,11 @@ def test_infrastructure_fixes():
           err is None,
           f"selling 10.5 of 10.5 should pass, got: {err}")
 
-    # --- B.7: BacktestEngine bar data fallback (verified by code inspection) ---
-    check("B.7-backtest-engine-fallback",
-          True,
-          "bar_data_map fallback replaced with explicit None check + continue")
+    # --- B.7: BacktestEngine bar data fallback ---
+    from quant_framework.backtest.backtest_engine import BacktestEngine as BTE
+    check("B.7-backtest-engine-exists",
+          hasattr(BTE, 'run') or hasattr(BTE, 'run_backtest'),
+          "BacktestEngine has run method")
 
     # --- H.5: TradeJournal breakeven ---
     import tempfile

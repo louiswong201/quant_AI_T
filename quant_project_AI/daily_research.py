@@ -152,15 +152,22 @@ def resample_to_4h(df_1h: pd.DataFrame) -> pd.DataFrame:
 
 def _incremental_download(sym: str, ticker: str, csv_path: str,
                           interval: str, period_fallback: str) -> int:
+    import logging
+    _log = logging.getLogger(__name__)
     existing = None
     if os.path.exists(csv_path):
         existing = pd.read_csv(csv_path)
-        dates = pd.to_datetime(existing["date"], utc=True)
-        last_date = dates.max()
-        days_since = (datetime.now() - last_date.to_pydatetime().replace(tzinfo=None)).days
-        if days_since <= 0:
-            return 0
-        period = f"{min(days_since + 5, 30)}d"
+        if existing.empty:
+            _log.warning("Empty CSV for %s, re-downloading full history", sym)
+            existing = None
+            period = period_fallback
+        else:
+            dates = pd.to_datetime(existing["date"], utc=True)
+            last_date = dates.max()
+            days_since = (datetime.now() - last_date.to_pydatetime().replace(tzinfo=None)).days
+            if days_since <= 0:
+                return 0
+            period = f"{min(days_since + 5, 30)}d"
     else:
         period = period_fallback
 

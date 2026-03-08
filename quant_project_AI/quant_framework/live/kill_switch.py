@@ -41,6 +41,7 @@ class KillSwitch:
                 logger.error("Kill switch: cancel orders failed: %s", e)
 
         positions = exec_broker.get_positions()
+        max_retries = 3
         for symbol, qty in positions.items():
             if abs(float(qty)) <= 1e-10:
                 continue
@@ -51,20 +52,46 @@ class KillSwitch:
                 "shares": abs(float(qty)),
                 "reduce_only": True,
             }
-            try:
-                if submit_order_async is not None:
-                    res = await submit_order_async(sig)
-                else:
-                    sig["order_type"] = "market"
-                    res = await asyncio.to_thread(exec_broker.submit_order, sig)
+            last_error: Optional[Exception] = None
+            for attempt in range(max_retries):
+                try:
+                    if submit_order_async is not None:
+                        res = await submit_order_async(sig)
+                    else:
+                        sig["order_type"] = "market"
+                        res = await asyncio.to_thread(exec_broker.submit_order, sig)
+                    closed.append({
+                        "symbol": symbol,
+                        "side": side,
+                        "requested_shares": abs(float(qty)),
+                        "result": res,
+                    })
+                    if res.get("status") == "filled":
+                        logger.info("Kill switch: closed %s %s @ %.4f shares", symbol, side, abs(float(qty)))
+                    else:
+                        logger.warning("Kill switch: close %s returned status=%s", symbol, res.get("status", "unknown"))
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.error("Kill switch: close %s failed (attempt %d/%d): %s", symbol, attempt + 1, max_retries, e)
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1.0)
+            else:
+                logger.error("Kill switch: close %s failed after %d retries: %s", symbol, max_retries, last_error)
                 closed.append({
                     "symbol": symbol,
                     "side": side,
                     "requested_shares": abs(float(qty)),
-                    "result": res,
+                    "result": {"status": "error", "message": str(last_error) if last_error else "unknown"},
                 })
-            except Exception as e:
-                logger.error("Kill switch: close %s failed: %s", symbol, e)
+
+        closed_count = sum(1 for c in closed if c.get("result", {}).get("status") == "filled")
+        failed = [c for c in closed if c.get("result", {}).get("status") != "filled"]
+        failed_count = len(failed)
+        if closed_count > 0:
+            logger.info("Kill switch: closed %d position(s): %s", closed_count, [c["symbol"] for c in closed if c.get("result", {}).get("status") == "filled"])
+        if failed_count > 0:
+            logger.warning("Kill switch: failed to close %d position(s): %s", failed_count, [c["symbol"] for c in failed])
 
         if self._alert is not None:
             send = getattr(self._alert, "send", None)

@@ -350,11 +350,15 @@ def _fetch_arxiv(query: str, max_results: int = 10) -> List[Dict[str, str]]:
         published = entry.find("atom:published", ns)
         link = entry.find("atom:id", ns)
 
+        title_text = (title.text or "").strip().replace("\n", " ") if title is not None else ""
+        summary_text = (summary.text or "").strip()[:500] if summary is not None else ""
+        published_text = (published.text or "")[:10] if published is not None else ""
+        link_text = (link.text or "").strip() if link is not None else ""
         papers.append({
-            "title": title.text.strip().replace("\n", " ") if title is not None else "",
-            "abstract": summary.text.strip()[:500] if summary is not None else "",
-            "published": published.text[:10] if published is not None else "",
-            "url": link.text.strip() if link is not None else "",
+            "title": title_text,
+            "abstract": summary_text,
+            "published": published_text,
+            "url": link_text,
         })
 
     return papers

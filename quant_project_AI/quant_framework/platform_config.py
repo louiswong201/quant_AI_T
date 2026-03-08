@@ -16,6 +16,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _CONFIGURED = False
+_CACHE_WARNING_ENV = "_QUANT_NUMBA_CACHE_WARNED"
 
 
 def configure() -> None:
@@ -87,7 +88,28 @@ def optimal_thread_config() -> dict:
     }
 
 
-def check_numba_cache(full: bool = True) -> bool:
+def _get_numba_cache_dir() -> Path:
+    custom = os.environ.get("NUMBA_CACHE_DIR")
+    if custom:
+        return Path(custom)
+    return Path(__file__).parent / "backtest" / "__pycache__"
+
+
+def _has_cached_module(cache_dir: Path, module_name: str) -> bool:
+    pattern = f"{module_name}.*.nbi"
+    return any(cache_dir.rglob(pattern))
+
+
+def _warn_cache_missing(message: str, *args) -> None:
+    # Persist the warning flag in the environment so Windows spawned workers
+    # inherit it and do not spam the same message during large scans.
+    if os.environ.get(_CACHE_WARNING_ENV) == "1":
+        return
+    os.environ[_CACHE_WARNING_ENV] = "1"
+    logger.warning(message, *args)
+
+
+def check_numba_cache(full: bool = True, log_missing: bool = True) -> bool:
     """Return True if Numba cache files exist for kernels and robustness.
 
     Parameters
@@ -100,22 +122,19 @@ def check_numba_cache(full: bool = True) -> bool:
     Logs a warning when the cache is missing — the first run will need
     to JIT-compile ~96+ functions which can take several minutes.
     """
-    custom = os.environ.get("NUMBA_CACHE_DIR")
-    if custom:
-        cache_dir = Path(custom)
-    else:
-        cache_dir = Path(__file__).parent / "backtest" / "__pycache__"
+    cache_dir = _get_numba_cache_dir()
 
     if not cache_dir.is_dir():
-        logger.warning(
-            "Numba cache directory not found — first run will JIT-compile "
-            "~96+ functions (may take 5-10 min on older CPUs).  "
-            "Run  python -m quant_framework.warmup  to pre-compile."
-        )
+        if log_missing:
+            _warn_cache_missing(
+                "Numba cache directory not found — first run will JIT-compile "
+                "~96+ functions (may take 5-10 min on older CPUs).  "
+                "Run  python -m quant_framework.warmup  to pre-compile."
+            )
         return False
 
-    has_kernels = any(cache_dir.glob("kernels.*.nbi"))
-    has_robust = any(cache_dir.glob("robust_scan.*.nbi"))
+    has_kernels = _has_cached_module(cache_dir, "kernels")
+    has_robust = _has_cached_module(cache_dir, "robust_scan")
 
     if has_kernels and (has_robust or not full):
         return True
@@ -126,9 +145,10 @@ def check_numba_cache(full: bool = True) -> bool:
     if full and not has_robust:
         missing.append("robust_scan")
 
-    logger.warning(
-        "Numba cache incomplete (missing: %s) — first run will JIT-compile. "
-        "Run  python -m quant_framework.warmup  to pre-compile.",
-        ", ".join(missing),
-    )
+    if log_missing:
+        _warn_cache_missing(
+            "Numba cache incomplete (missing: %s) — first run will JIT-compile. "
+            "Run  python -m quant_framework.warmup  to pre-compile.",
+            ", ".join(missing),
+        )
     return False

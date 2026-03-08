@@ -54,6 +54,7 @@ class TradingRunner:
         bt_config: Optional[BacktestConfig] = None,
         symbol_configs: Optional[Dict[str, BacktestConfig]] = None,
         position_size_pct: float = 0.05,
+        symbol_size_overrides: Optional[Dict[str, float]] = None,
         equity_snapshot_interval: float = 60.0,
         on_update: Optional[Callable[[], Any]] = None,
     ):
@@ -64,6 +65,7 @@ class TradingRunner:
         self._bt_config = bt_config
         self._symbol_configs = symbol_configs or {}
         self._pos_size_pct = position_size_pct
+        self._symbol_size_overrides = symbol_size_overrides or {}
         self._eq_interval = equity_snapshot_interval
         self._on_update = on_update
         self._running = False
@@ -194,10 +196,15 @@ class TradingRunner:
             if sig["action"] == "buy":
                 was_realized_close = prior_entry is not None and prior_entry[1] < 0
                 if symbol in self._entry_prices and self._entry_prices[symbol][1] < 0:
-                    entry, _ = self._entry_prices.pop(symbol)
+                    entry, prior_qty = self._entry_prices[symbol]
                     pnl = (entry - fill_price) * filled_shares - commission
                     if cur_qty > 0:
+                        self._entry_prices.pop(symbol, None)
                         self._entry_prices[symbol] = (fill_price, cur_qty)
+                    elif cur_qty < 0:
+                        self._entry_prices[symbol] = (entry, cur_qty)
+                    else:
+                        self._entry_prices.pop(symbol, None)
                 elif symbol not in self._entry_prices:
                     self._entry_prices[symbol] = (fill_price, cur_qty)
                 else:
@@ -207,10 +214,15 @@ class TradingRunner:
             elif sig["action"] == "sell":
                 was_realized_close = prior_entry is not None and prior_entry[1] > 0
                 if symbol in self._entry_prices and self._entry_prices[symbol][1] > 0:
-                    entry, _ = self._entry_prices.pop(symbol)
+                    entry, prior_qty = self._entry_prices[symbol]
                     pnl = (fill_price - entry) * filled_shares - commission
                     if cur_qty < 0:
+                        self._entry_prices.pop(symbol, None)
                         self._entry_prices[symbol] = (fill_price, cur_qty)
+                    elif cur_qty > 0:
+                        self._entry_prices[symbol] = (entry, cur_qty)
+                    else:
+                        self._entry_prices.pop(symbol, None)
                 elif symbol not in self._entry_prices:
                     self._entry_prices[symbol] = (fill_price, cur_qty)
                 else:
@@ -360,9 +372,11 @@ class TradingRunner:
         if price <= 0:
             return 0.0
         cash = self._broker.get_cash()
-        cfg = self._get_config(sig.get("symbol", ""))
+        symbol = sig.get("symbol", "")
+        cfg = self._get_config(symbol)
         leverage = cfg.leverage if cfg else 1.0
-        notional = cash * self._pos_size_pct * leverage
+        size_pct = self._symbol_size_overrides.get(symbol, self._pos_size_pct)
+        notional = cash * size_pct * leverage
         raw = notional / price
         allow_frac = getattr(self._broker, "_allow_fractional", False)
         if not allow_frac:
@@ -438,6 +452,16 @@ class TradingRunner:
     def _shutdown(self) -> None:
         logger.info("Shutdown signal received")
         self._running = False
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._feed.stop_all())
+        except Exception:
+            pass
+        try:
+            self._journal.close()
+        except Exception:
+            pass
 
     def _invalidate_state_cache(self) -> None:
         self._state_cache = None

@@ -134,7 +134,7 @@ def test_monitor_real(tf_data, live_config):
 
         t0 = time.time()
         metrics = compute_health_metrics(strategy, params, ds, config,
-                                         recent_n=recent_n, interval=tf)
+                                         recent_n=recent_n, interval=tf, symbol=sym)
         elapsed_ms = (time.time() - t0) * 1000
 
         if metrics.get("error"):
@@ -181,7 +181,7 @@ def test_monitor_real(tf_data, live_config):
             co["sb"], co["ss"], co["cm"], co["lev"], co["dc"],
             co["sl"], co["pfrac"], co["sl_slip"],
         )
-        bars_per_year = {"1d": 252, "4h": 1512, "1h": 6048}.get(tf, 252)
+        bars_per_year = int(config.bars_per_year)
         bpd = {"1d": 1, "4h": 6, "1h": 24}.get(tf, 1)
         cv_window = max(30 * bpd, 10)
         if equity is not None and len(equity) > cv_window + 1:

@@ -77,8 +77,18 @@ def _win_rate_ema(equity: np.ndarray, span: int = 20) -> float:
     return float(wr)
 
 
-_BARS_PER_YEAR = {"1d": 252, "4h": 1512, "1h": 6048}
+_BARS_PER_YEAR_STOCK = {"1d": 252, "4h": 441, "1h": 1764}
+_BARS_PER_YEAR_CRYPTO = {"1d": 365, "4h": 2190, "1h": 8760}
 _BARS_PER_DAY = {"1d": 1, "4h": 6, "1h": 24}
+
+_CRYPTO_HINT = {"BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "AVAX",
+                "DOT", "MATIC", "LINK", "UNI", "SHIB", "LTC", "ATOM"}
+
+
+def _bars_per_year(interval: str, symbol: str = "") -> int:
+    base = symbol.split("_")[0].upper() if symbol else ""
+    tbl = _BARS_PER_YEAR_CRYPTO if base in _CRYPTO_HINT else _BARS_PER_YEAR_STOCK
+    return tbl.get(interval, 252)
 
 
 def compute_health_metrics(
@@ -90,6 +100,7 @@ def compute_health_metrics(
     recent_n: Optional[int] = None,
     sharpe_window: int = 30,
     interval: str = "1d",
+    symbol: str = "",
 ) -> Dict[str, Any]:
     """Run strategy and compute 5-dimension health snapshot.
 
@@ -114,7 +125,7 @@ def compute_health_metrics(
         _log.warning("Health eval failed for %s: %s", strategy, exc)
         return {"error": str(exc), "status": "ERROR"}
 
-    bars_per_year = _BARS_PER_YEAR.get(interval, 252)
+    bars_per_year = _bars_per_year(interval, symbol)
     bars_per_day = _BARS_PER_DAY.get(interval, 1)
     # Scale sharpe window so it always covers ~30 calendar days
     scaled_window = max(sharpe_window * bars_per_day, 10)
@@ -147,10 +158,12 @@ def assess_status(
     s = current.get("sharpe_30d", 0)
 
     # Trend: 3+ consecutive declining checks
+    # history is newest-first (ORDER BY ts DESC), so [0]=newest, [1]=older, [2]=oldest
+    # Declining = newest < older < oldest, i.e. recent_sharpes[i] < recent_sharpes[i+1]
     if len(history) >= 3:
         recent_sharpes = [h.get("sharpe_30d", 0) for h in history[:3]]
         declining = all(
-            recent_sharpes[i] < recent_sharpes[i + 1]
+            recent_sharpes[i] > recent_sharpes[i + 1]
             for i in range(len(recent_sharpes) - 1)
         )
     else:
@@ -421,6 +434,7 @@ def run_monitor(
         # 2a: Health
         metrics = compute_health_metrics(
             strategy, params, ds, config, recent_n=recent_n, interval=tf,
+            symbol=sym,
         )
         history = db.get_health_trend(sym, strategy, days=30)
         original_sharpe = rec.get("backtest_metrics", {}).get("sharpe", 0)

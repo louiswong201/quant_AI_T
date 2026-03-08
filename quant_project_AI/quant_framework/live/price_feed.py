@@ -318,6 +318,7 @@ class BinanceFeed:
         self._running = False
         self._ws = None
         self._tick_callbacks: List[Callable[[TickEvent], Any]] = []
+        self._reconnect_attempts = 0
 
     @property
     def symbol(self) -> str:
@@ -557,6 +558,10 @@ class BinanceCombinedFeed:
 
     async def run(self) -> None:
         """Connect to combined-streams WS, route kline messages by interval."""
+        if not self._intervals:
+            logger.warning("BinanceCombinedFeed %s: no intervals configured, skipping WS", self._symbol)
+            return
+
         import websockets
 
         streams = "/".join(

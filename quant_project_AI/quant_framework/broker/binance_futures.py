@@ -51,6 +51,7 @@ class BinanceFuturesBroker(Broker):
         self._total_maint_margin = 0.0
         self._available_balance = 0.0
         self._order_symbols: Dict[str, str] = {}
+        self._user_data_stream_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> None:
         api_key, secret = self._cred.load("binance")
@@ -65,10 +66,17 @@ class BinanceFuturesBroker(Broker):
         await self._load_exchange_info()
         await self.sync_positions()
         await self.sync_balance()
-        asyncio.create_task(self._user_data_stream())
+        self._user_data_stream_task = asyncio.create_task(self._user_data_stream())
 
     async def close(self) -> None:
         self._running = False
+        if getattr(self, "_user_data_stream_task", None) is not None:
+            self._user_data_stream_task.cancel()
+            try:
+                await self._user_data_stream_task
+            except asyncio.CancelledError:
+                pass
+            self._user_data_stream_task = None
         if self._session:
             await self._session.close()
             self._session = None
@@ -117,6 +125,8 @@ class BinanceFuturesBroker(Broker):
         params: Optional[Dict[str, Any]] = None,
         signed: bool = True,
     ) -> Any:
+        if self._session is None:
+            raise RuntimeError("BinanceFuturesBroker not initialized. Call await initialize() first.")
         params = dict(params) if params else {}
         if signed:
             await self._rate_limiter.acquire(weight=1)
@@ -194,10 +204,8 @@ class BinanceFuturesBroker(Broker):
 
     async def cancel_order_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         sym = symbol or self._order_symbols.get(order_id)
-        if not sym and self._symbol_specs:
-            sym = next(iter(self._symbol_specs))
         if not sym:
-            return {"status": "error", "message": "no symbol for cancel"}
+            raise ValueError(f"Unknown symbol for cancel: {symbol or order_id}")
         try:
             await self._request("DELETE", "/fapi/v1/order", {"symbol": sym, "orderId": order_id})
             return {"status": "cancelled", "order_id": order_id}

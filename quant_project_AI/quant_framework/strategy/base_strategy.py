@@ -118,6 +118,8 @@ class BaseStrategy(ABC):
         Returns:
             Number of shares (floored to int, minimum 0).
         """
+        if price <= 0:
+            return 0
         amount = self.portfolio_value * capital_fraction
         shares = int(amount / price)
         return max(0, shares)
@@ -129,7 +131,12 @@ class BaseStrategy(ABC):
     
     def can_sell(self, symbol: str, shares: int) -> bool:
         """检查是否可以卖出"""
-        return self.positions.get(symbol, 0) >= shares
+        pos = self.positions.get(symbol, 0)
+        if pos > 0:
+            return pos >= shares
+        if pos < 0:
+            return True  # allow closing/reducing short positions
+        return False  # no position
     
     def buy(self, symbol: str, price: float, shares: int) -> bool:
         """

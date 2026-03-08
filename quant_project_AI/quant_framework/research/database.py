@@ -207,17 +207,18 @@ class ResearchDB:
         return rows[0] if rows else None
 
     def get_all_latest_health(self) -> List[Dict[str, Any]]:
-        """Latest health row per (symbol, strategy) pair."""
+        """Latest health row per (symbol, strategy) pair (deduplicated via ROW_NUMBER)."""
         with self._cursor() as cur:
             cur.execute("""
-                SELECT h.* FROM strategy_health h
-                INNER JOIN (
-                    SELECT symbol, strategy, MAX(ts) as max_ts
-                    FROM strategy_health GROUP BY symbol, strategy
-                ) latest ON h.symbol = latest.symbol
-                           AND h.strategy = latest.strategy
-                           AND h.ts = latest.max_ts
-                ORDER BY h.symbol, h.strategy
+                SELECT * FROM (
+                    SELECT h.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY h.symbol, h.strategy
+                               ORDER BY h.ts DESC
+                           ) as rn
+                    FROM strategy_health h
+                ) ranked WHERE rn = 1
+                ORDER BY symbol, strategy
             """)
             return [dict(r) for r in cur.fetchall()]
 

@@ -115,6 +115,10 @@ def perturb_ohlc(close, open_, high, low, noise_std, seed):
         lw = max(0.0, min(close[i], open_[i]) - low[i])
         h_p[i] = body_hi + uw * (1.0 + np.random.randn() * noise_std * 0.5)
         l_p[i] = body_lo - lw * (1.0 + np.random.randn() * noise_std * 0.5)
+        if h_p[i] < body_hi:
+            h_p[i] = body_hi
+        if l_p[i] > body_lo:
+            l_p[i] = body_lo
     return c_p, o_p, h_p, l_p
 
 

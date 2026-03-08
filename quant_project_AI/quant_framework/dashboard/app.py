@@ -19,6 +19,7 @@ try:
     import dash
     from dash import dcc, html
     from dash.dependencies import Input, Output
+    from dash.exceptions import PreventUpdate
 
     DASH_AVAILABLE = True
 except ImportError:
@@ -614,7 +615,7 @@ def create_app(
     )
 
     symbol_options = [{"label": s, "value": s} for s in symbols]
-    default_symbol = symbols[0] if symbols else ""
+    default_symbol = symbols[0] if symbols else "N/A"
 
     app.index_string = """<!DOCTYPE html>
 <html>
@@ -871,7 +872,9 @@ def create_app(
     def sync_kill_switch(_n: int, n_clicks: int):
         error_message = ""
         ctx = getattr(dash, "callback_context", None)
-        triggered = ctx.triggered[0]["prop_id"].split(".")[0] if ctx and ctx.triggered else ""
+        if not ctx or not ctx.triggered:
+            raise PreventUpdate
+        triggered = ctx.triggered[0]["prop_id"].split(".")[0]
 
         if triggered == "kill-switch-btn" and n_clicks:
             if trigger_kill_switch is None:

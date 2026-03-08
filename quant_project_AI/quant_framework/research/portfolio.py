@@ -47,13 +47,14 @@ def compute_correlation_matrix(
         trend = db.get_health_trend(sym, strat, days=lookback_days)
         if len(trend) < 5:
             continue
-        # Use daily return series from health snapshots
-        rets = np.array([h.get("ret_pct", 0) for h in reversed(trend)], dtype=np.float64)
-        if len(rets) > 1:
-            equity = 1.0 + rets
-            daily_rets = np.diff(equity) / np.maximum(equity[:-1], 1e-12)
+        ret_series = np.array(
+            [h.get("ret_pct", 0) for h in reversed(trend)],
+            dtype=np.float64,
+        )
+        if len(ret_series) > 1:
+            daily_rets = np.diff(ret_series)
         else:
-            daily_rets = rets
+            daily_rets = np.array([], dtype=np.float64)
         returns_dict[key] = daily_rets
 
     if len(returns_dict) < 2:

@@ -47,6 +47,7 @@ class CryptoFuturesMargin(MarginModel):
                               2_516_050, 5_016_050, 25_016_050])
 
     def initial_margin(self, notional: float, leverage: float = 1.0) -> float:
+        leverage = max(leverage, 1.0)
         return notional / leverage
 
     def maintenance_margin(self, notional: float) -> float:
@@ -54,9 +55,11 @@ class CryptoFuturesMargin(MarginModel):
         return notional * float(self._TIER_RATES[idx]) - float(self._TIER_AMOUNTS[idx])
 
     def liquidation_price_long(self, entry: float, leverage: float, maint_rate: float) -> float:
+        leverage = max(leverage, 1.0)
         return entry * (1 - 1 / leverage + maint_rate)
 
     def liquidation_price_short(self, entry: float, leverage: float, maint_rate: float) -> float:
+        leverage = max(leverage, 1.0)
         return entry * (1 + 1 / leverage - maint_rate)
 
     def maintenance_rate_for_notional(self, notional: float) -> float:

@@ -18,6 +18,7 @@ class AlertManager:
         self._telegram_chat = config.get("telegram_chat_id")
         self._discord_webhook = config.get("discord_webhook_url")
         self._log_to_console = config.get("console", True)
+        self._session = None
 
     async def send(self, level: str, title: str, body: str) -> List[Any]:
         """Send alert to all configured channels."""
@@ -47,14 +48,20 @@ class AlertManager:
         else:
             logger.info("%s", msg)
 
+    async def _get_session(self):
+        import aiohttp
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
     async def _send_telegram(self, level: str, title: str, body: str) -> None:
         text = f"*{level}*\n*{title}*\n\n{body}"
         url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
         payload = {"chat_id": self._telegram_chat, "text": text, "parse_mode": "Markdown"}
-        import aiohttp
-        async with aiohttp.ClientSession() as sess:
-            async with sess.post(url, json=payload) as resp:
-                resp.raise_for_status()
+        sess = await self._get_session()
+        async with sess.post(url, json=payload) as resp:
+            resp.raise_for_status()
 
     async def _send_discord(self, level: str, title: str, body: str) -> None:
         color = 0xE74C3C if level.upper() in ("CRITICAL", "ERROR") else 0xF39C12
@@ -65,7 +72,19 @@ class AlertManager:
                 "color": color,
             }]
         }
-        import aiohttp
-        async with aiohttp.ClientSession() as sess:
-            async with sess.post(self._discord_webhook, json=payload) as resp:
-                resp.raise_for_status()
+        sess = await self._get_session()
+        async with sess.post(self._discord_webhook, json=payload) as resp:
+            resp.raise_for_status()
+
+    def close(self) -> None:
+        """Close the shared aiohttp session. Call when shutting down."""
+        if self._session is not None and not self._session.closed:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._session.close())
+                else:
+                    loop.run_until_complete(self._session.close())
+            except Exception:
+                pass
