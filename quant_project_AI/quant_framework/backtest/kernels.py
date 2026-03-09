@@ -136,61 +136,14 @@ def _score(ret, dd, nt):
 # =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_all_ma(close, max_w=200):
+def precompute_up_prefix(close):
+    """Prefix-sum of up-bars for O(1) drift ratio lookup."""
     n = len(close)
-    cs = np.empty(n + 1, dtype=np.float64)
-    cs[0] = 0.0
-    for i in range(n):
-        cs[i + 1] = cs[i] + close[i]
-    mas = np.full((max_w + 1, n), np.nan, dtype=np.float64)
-    for w in range(2, min(max_w + 1, n + 1)):
-        inv_w = 1.0 / w
-        for i in range(w - 1, n):
-            mas[w, i] = (cs[i + 1] - cs[i - w + 1]) * inv_w
-    return mas
+    psum = np.zeros(n + 1, dtype=np.int64)
+    for i in range(1, n):
+        psum[i + 1] = psum[i] + (1 if close[i] > close[i - 1] else 0)
+    return psum
 
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_all_ema(close, max_s):
-    n = len(close)
-    emas = np.full((max_s + 1, n), np.nan, dtype=np.float64)
-    for s in range(2, max_s + 1):
-        k = 2.0 / (s + 1.0)
-        emas[s, 0] = close[0]
-        for i in range(1, n):
-            emas[s, i] = close[i] * k + emas[s, i - 1] * (1.0 - k)
-    return emas
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_all_rsi(close, max_p):
-    n = len(close)
-    rsi = np.full((max_p + 1, n), np.nan, dtype=np.float64)
-    for p in range(2, max_p + 1):
-        if n <= p:
-            continue
-        gs = 0.0; ls = 0.0
-        for i in range(1, p + 1):
-            d = close[i] - close[i - 1]
-            if d > 0:
-                gs += d
-            else:
-                ls -= d
-        ag = gs / p; al = ls / p
-        rsi[p, p] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
-        for i in range(p + 1, n):
-            d = close[i] - close[i - 1]
-            g = d if d > 0 else 0.0
-            l_ = -d if d < 0 else 0.0
-            ag = (ag * (p - 1) + g) / p
-            al = (al * (p - 1) + l_) / p
-            rsi[p, i] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
-    return rsi
-
-
-# =====================================================================
-#  Additional precomputation for O(n*p)->O(n) kernel optimization
-# =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
 def _rolling_max_1d(arr, w):
@@ -217,18 +170,6 @@ def _rolling_max_1d(arr, w):
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_rolling_max(arr, max_w):
-    """Precompute rolling max for all windows [2..max_w]. O(n) per window."""
-    n = len(arr)
-    out = np.full((max_w + 1, n), np.nan, dtype=np.float64)
-    for w in range(2, max_w + 1):
-        rm = _rolling_max_1d(arr, w)
-        for i in range(n):
-            out[w, i] = rm[i]
-    return out
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
 def _rolling_min_1d(arr, w):
     """O(n) rolling min for a single window using block decomposition."""
     n = len(arr)
@@ -250,68 +191,6 @@ def _rolling_min_1d(arr, w):
         s = suffix[i]
         out[i] = p if p < s else s
     return out
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_rolling_min(arr, max_w):
-    """Precompute rolling min for all windows [2..max_w]. O(n) per window."""
-    n = len(arr)
-    out = np.full((max_w + 1, n), np.nan, dtype=np.float64)
-    for w in range(2, max_w + 1):
-        rm = _rolling_min_1d(arr, w)
-        for i in range(n):
-            out[w, i] = rm[i]
-    return out
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_up_prefix(close):
-    """Prefix-sum of up-bars for O(1) drift ratio lookup."""
-    n = len(close)
-    psum = np.zeros(n + 1, dtype=np.int64)
-    for i in range(1, n):
-        psum[i + 1] = psum[i] + (1 if close[i] > close[i - 1] else 0)
-    return psum
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_rolling_vol(close, max_vp):
-    """Precompute rolling volatility for all vol_p in [2..max_vp]."""
-    n = len(close)
-    rets = np.zeros(n, dtype=np.float64)
-    for i in range(1, n):
-        rets[i] = (close[i] / close[i - 1] - 1.0) if close[i - 1] > 0 else 0.0
-    vols = np.full((max_vp + 1, n), np.nan, dtype=np.float64)
-    for vp in range(2, max_vp + 1):
-        s = 0.0; s2 = 0.0
-        for i in range(vp):
-            s += rets[i]; s2 += rets[i] * rets[i]
-        if vp > 0:
-            m = s / vp
-            vols[vp, vp - 1] = np.sqrt(max(1e-20, s2 / vp - m * m))
-        for i in range(vp, n):
-            s += rets[i] - rets[i - vp]
-            s2 += rets[i] * rets[i] - rets[i - vp] * rets[i - vp]
-            m = s / vp
-            vols[vp, i] = np.sqrt(max(1e-20, s2 / vp - m * m))
-    return vols
-
-
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
-def precompute_all_rolling_std(close, max_w):
-    """Precompute rolling std for windows [2..max_w]. Reusable by Bollinger/ZScore."""
-    n = len(close)
-    stds = np.full((max_w + 1, n), np.nan, dtype=np.float64)
-    for w in range(2, max_w + 1):
-        s = 0.0; s2 = 0.0
-        for i in range(n):
-            s += close[i]; s2 += close[i] * close[i]
-            if i >= w:
-                s -= close[i - w]; s2 -= close[i - w] * close[i - w]
-            if i >= w - 1:
-                m = s / w
-                stds[w, i] = np.sqrt(max(0.0, s2 / w - m * m))
-    return stds
 
 
 # =====================================================================
@@ -2566,16 +2445,16 @@ POSITION_FRAC: Dict[int, float] = {
 # =====================================================================
 
 DEFAULT_PARAM_GRIDS: Dict[str, List[tuple]] = {
-    "MA": [(s, lg) for s in range(5, 100, 3) for lg in range(s + 5, 201, 5)],
-    "RSI": [(p, os_v, ob_v) for p in range(5, 101, 5)
+    "MA": [(s, lg) for s in range(5, 100, 5) for lg in range(s + 5, 201, 8)],
+    "RSI": [(p, os_v, ob_v) for p in range(5, 101, 7)
             for os_v in range(15, 40, 5) for ob_v in range(60, 90, 5)],
-    "MACD": [(f, s, sg) for f in range(4, 50, 3)
-             for s in range(f + 4, 120, 5) for sg in range(3, min(s, 50), 4)],
+    "MACD": [(f, s, sg) for f in range(4, 50, 5)
+             for s in range(f + 5, 120, 8) for sg in range(3, min(s, 50), 6)],
     "Drift": [(lb, dt, hp) for lb in range(10, 120, 10)
               for dt in [0.55, 0.60, 0.65, 0.70] for hp in range(3, 25, 4)],
-    "RAMOM": [(mp, vp, ez, xz) for mp in range(5, 100, 10)
+    "RAMOM": [(mp, vp, ez, xz) for mp in range(5, 100, 15)
               for vp in range(5, 50, 10)
-              for ez in [1.0, 1.5, 2.0, 2.5, 3.0] for xz in [0.0, 0.5, 1.0]],
+              for ez in [1.0, 2.0, 3.0] for xz in [0.0, 0.5, 1.0]],
     "Turtle": [(ep, xp, ap, am) for ep in range(10, 80, 10)
                for xp in range(5, 40, 7) for ap in [10, 14, 20]
                for am in [1.5, 2.0, 2.5, 3.0]],
@@ -2928,6 +2807,58 @@ def eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.
     raise ValueError(f"Unknown strategy: {name}")
 
 
+def eval_kernel_precomp(name, params, c, o, h, l,
+                        mas=None, emas=None, rsis=None,
+                        sb=0.0, ss=0.0, cm=0.0, lev=1.0, dc=0.0,
+                        sl=0.80, pfrac=1.0, sl_slip=0.0):
+    """Like eval_kernel but reuses precomputed indicator arrays when available.
+
+    Precomputed arrays are 2-D ``(window_index, n)`` matrices produced by
+    ``precompute_sparse_*`` on the **full** price history and then sliced to
+    the evaluation period.  Using full-history indicators means OOS bars
+    retain proper lookback — more realistic than computing from scratch on
+    the isolated slice.  Strategies that do not use precomputed indicators
+    fall through to the same code as ``eval_kernel``.
+    """
+    if params is None:
+        return (0.0, 0.0, 0)
+    p = params
+
+    if name == "MA":
+        si, li = int(p[0]), int(p[1])
+        ma_s = mas[si] if mas is not None and si < mas.shape[0] else _rolling_mean(c, si)
+        ma_l = mas[li] if mas is not None and li < mas.shape[0] else _rolling_mean(c, li)
+        return bt_ma_ls(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+
+    if name == "RSI":
+        rp = int(p[0])
+        rsi_arr = rsis[rp] if rsis is not None and rp < rsis.shape[0] else _rsi_wilder(c, rp)
+        return bt_rsi_ls(c, o, rsi_arr, float(p[1]), float(p[2]),
+                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+
+    if name == "MACD":
+        fi, si_ = int(p[0]), int(p[1])
+        ema_f = emas[fi] if emas is not None and fi < emas.shape[0] else _ema(c, fi)
+        ema_s = emas[si_] if emas is not None and si_ < emas.shape[0] else _ema(c, si_)
+        return bt_macd_ls(c, o, ema_f, ema_s, int(p[2]),
+                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+
+    if name == "Consensus":
+        ms_ = int(min(200, max(2, p[0])))
+        ml_ = int(min(200, max(5, p[1])))
+        if ms_ >= ml_:
+            return (0.0, 0.0, 0)
+        rp_ = int(min(200, max(2, p[2])))
+        ma_s = mas[ms_] if mas is not None and ms_ < mas.shape[0] else _rolling_mean(c, ms_)
+        ma_l = mas[ml_] if mas is not None and ml_ < mas.shape[0] else _rolling_mean(c, ml_)
+        rsi_arr = rsis[rp_] if rsis is not None and rp_ < rsis.shape[0] else _rsi_wilder(c, rp_)
+        return bt_consensus_ls(c, o, ma_s, ma_l, rsi_arr,
+                               int(p[3]), float(p[4]), float(p[5]), int(p[6]),
+                               sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+
+    return eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+
+
 # =====================================================================
 #  Numba-compiled scan functions — zero Python-dispatch overhead
 # =====================================================================
@@ -2957,12 +2888,12 @@ def _scan_rsi_njit(grid, c, o, rsis, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
         if _sc[k] > _sc[bi]: bi = k
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
 def _precompute_macd_lines(emas, pairs, n):
     """Precompute MACD lines for unique (fast, slow) EMA pairs."""
     np_ = pairs.shape[0]
     out = np.empty((np_, n), dtype=np.float64)
-    for p in range(np_):
+    for p in prange(np_):
         fi = int(pairs[p, 0]); si = int(pairs[p, 1])
         for i in range(n):
             out[p, i] = emas[fi, i] - emas[si, i]
@@ -3096,13 +3027,13 @@ def _scan_mesa_njit(grid, c, o, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
         if _sc[k] > _sc[bi]: bi = k
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
-@njit(cache=True, fastmath=_SAFE_FASTMATH)
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
 def _precompute_all_kama(close, unique_params):
     """Precompute KAMA arrays for unique (erp, fsc, ssc) parameter combos."""
     n = len(close)
     n_unique = unique_params.shape[0]
     out = np.full((n_unique, n), np.nan, dtype=np.float64)
-    for k in range(n_unique):
+    for k in prange(n_unique):
         er_p = int(unique_params[k, 0])
         fast_sc = int(unique_params[k, 1])
         slow_sc = int(unique_params[k, 2])

@@ -54,32 +54,29 @@ def _rolling_mean_numba(arr: np.ndarray, window: int) -> np.ndarray:
 
 @njit(cache=True, fastmath=True)
 def _rolling_std_numba(arr: np.ndarray, window: int) -> np.ndarray:
-    """使用 Numba 加速的滚动标准差计算（O(n) 运行和/平方和）。"""
+    """Welford-style numerically stable rolling std.
+
+    Maintains running mean (M) and sum-of-squared-deviations (S) to avoid
+    catastrophic cancellation from ``s2/n - mean^2``.
+    """
     n = len(arr)
     result = np.full(n, np.nan, dtype=np.float64)
     if window <= 0 or n == 0 or n < window:
         return result
-    s = 0.0
-    s2 = 0.0
+    mean = 0.0
+    m2 = 0.0
     for i in range(window):
-        v = arr[i]
-        s += v
-        s2 += v * v
-    mean = s / window
-    var = s2 / window - mean * mean
-    if var < 0.0:
-        var = 0.0
-    result[window - 1] = np.sqrt(var)
+        delta = arr[i] - mean
+        mean += delta / (i + 1)
+        m2 += delta * (arr[i] - mean)
+    result[window - 1] = np.sqrt(m2 / window) if m2 >= 0.0 else 0.0
     for i in range(window, n):
-        add_v = arr[i]
-        rm_v = arr[i - window]
-        s += add_v - rm_v
-        s2 += add_v * add_v - rm_v * rm_v
-        mean = s / window
-        var = s2 / window - mean * mean
-        if var < 0.0:
-            var = 0.0
-        result[i] = np.sqrt(var)
+        old = arr[i - window]
+        new = arr[i]
+        old_mean = mean
+        mean += (new - old) / window
+        m2 += (new - old) * (new - mean + old - old_mean)
+        result[i] = np.sqrt(m2 / window) if m2 >= 0.0 else 0.0
     return result
 
 
@@ -175,14 +172,23 @@ def _atr_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int
 
 @njit(cache=True, fastmath=True)
 def _cci_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
-    """CCI = (TP - SMA(TP)) / (0.015 * MeanDev(TP))，TP = (H+L+C)/3。"""
+    """O(N) CCI using rolling cumsum for SMA and two-pass mean-deviation."""
     n = len(close)
     tp = (high + low + close) / 3.0
     cci = np.full(n, np.nan)
+    if n < period:
+        return cci
+    cs = np.empty(n + 1, dtype=np.float64)
+    cs[0] = 0.0
+    for i in range(n):
+        cs[i + 1] = cs[i] + tp[i]
+    inv_p = 1.0 / period
     for i in range(period - 1, n):
-        window = tp[i - period + 1 : i + 1]
-        sma = np.mean(window)
-        mad = np.mean(np.abs(window - sma))
+        sma = (cs[i + 1] - cs[i - period + 1]) * inv_p
+        mad = 0.0
+        for j in range(i - period + 1, i + 1):
+            mad += abs(tp[j] - sma)
+        mad *= inv_p
         if mad > 1e-12:
             cci[i] = (tp[i] - sma) / (0.015 * mad)
         else:
@@ -191,16 +197,56 @@ def _cci_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int
 
 
 @njit(cache=True, fastmath=True)
+def _rolling_max_deque(arr: np.ndarray, w: int) -> np.ndarray:
+    """O(N) rolling max using a monotonic deque (indices stored in int array)."""
+    n = len(arr)
+    out = np.full(n, np.nan)
+    dq = np.empty(n, dtype=np.int64)
+    head = 0
+    tail = 0
+    for i in range(n):
+        while head < tail and arr[dq[tail - 1]] <= arr[i]:
+            tail -= 1
+        dq[tail] = i
+        tail += 1
+        if dq[head] <= i - w:
+            head += 1
+        if i >= w - 1:
+            out[i] = arr[dq[head]]
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _rolling_min_deque(arr: np.ndarray, w: int) -> np.ndarray:
+    """O(N) rolling min using a monotonic deque."""
+    n = len(arr)
+    out = np.full(n, np.nan)
+    dq = np.empty(n, dtype=np.int64)
+    head = 0
+    tail = 0
+    for i in range(n):
+        while head < tail and arr[dq[tail - 1]] >= arr[i]:
+            tail -= 1
+        dq[tail] = i
+        tail += 1
+        if dq[head] <= i - w:
+            head += 1
+        if i >= w - 1:
+            out[i] = arr[dq[head]]
+    return out
+
+
+@njit(cache=True, fastmath=True)
 def _willr_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
-    """Williams %R = (HighestHigh - Close) / (HighestHigh - LowestLow) * -100。"""
+    """O(N) Williams %R using monotonic-deque rolling max/min."""
     n = len(close)
     out = np.full(n, np.nan)
+    hh = _rolling_max_deque(high, period)
+    ll = _rolling_min_deque(low, period)
     for i in range(period - 1, n):
-        hh = np.max(high[i - period + 1 : i + 1])
-        ll = np.min(low[i - period + 1 : i + 1])
-        r = hh - ll
+        r = hh[i] - ll[i]
         if r > 1e-12:
-            out[i] = -100.0 * (hh - close[i]) / r
+            out[i] = -100.0 * (hh[i] - close[i]) / r
         else:
             out[i] = -50.0
     return out
@@ -208,20 +254,29 @@ def _willr_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: i
 
 @njit(cache=True, fastmath=True)
 def _stoch_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray, k_period: int, d_period: int) -> tuple:
-    """Stochastic %K = (C-L14)/(H14-L14)*100，%D = SMA(%K, d_period)。"""
+    """O(N) Stochastic using monotonic-deque rolling max/min + cumsum SMA."""
     n = len(close)
     k = np.full(n, np.nan)
+    hh = _rolling_max_deque(high, k_period)
+    ll = _rolling_min_deque(low, k_period)
     for i in range(k_period - 1, n):
-        hh = np.max(high[i - k_period + 1 : i + 1])
-        ll = np.min(low[i - k_period + 1 : i + 1])
-        r = hh - ll
+        r = hh[i] - ll[i]
         if r > 1e-12:
-            k[i] = 100.0 * (close[i] - ll) / r
+            k[i] = 100.0 * (close[i] - ll[i]) / r
         else:
             k[i] = 50.0
     d = np.full(n, np.nan)
-    for i in range(k_period - 1 + d_period - 1, n):
-        d[i] = np.mean(k[i - d_period + 1 : i + 1])
+    if d_period <= 1:
+        for i in range(k_period - 1, n):
+            d[i] = k[i]
+        return k, d
+    cs = np.zeros(n + 1, dtype=np.float64)
+    for i in range(n):
+        cs[i + 1] = cs[i] + (k[i] if not np.isnan(k[i]) else 0.0)
+    inv_d = 1.0 / d_period
+    start = k_period - 1 + d_period - 1
+    for i in range(start, n):
+        d[i] = (cs[i + 1] - cs[i - d_period + 1]) * inv_d
     return k, d
 
 

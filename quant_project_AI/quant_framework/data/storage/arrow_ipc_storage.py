@@ -51,14 +51,29 @@ class ArrowIpcStorage:
         if not os.path.isfile(path):
             return None
         try:
-            table = feather.read_feather(path, columns=columns, memory_map=True)
-            df = table.to_pandas()
+            import pyarrow.compute as pc
+
+            source = pa.ipc.open_file(pa.memory_map(path, "r"))
+            table = source.read_all()
+            if columns is not None:
+                existing = [c for c in columns if c in table.column_names]
+                if "date" not in existing and "date" in table.column_names:
+                    existing = ["date"] + existing
+                table = table.select(existing)
+
+            if "date" in table.column_names:
+                date_col = pc.cast(table.column("date"), pa.timestamp("us"))
+                if start_date is not None:
+                    mask = pc.greater_equal(date_col, pa.scalar(pd.Timestamp(start_date), type=pa.timestamp("us")))
+                    table = table.filter(mask)
+                    date_col = pc.cast(table.column("date"), pa.timestamp("us"))
+                if end_date is not None:
+                    mask = pc.less_equal(date_col, pa.scalar(pd.Timestamp(end_date), type=pa.timestamp("us")))
+                    table = table.filter(mask)
+
+            df = table.to_pandas(self_destruct=True)
             if "date" in df.columns:
                 df["date"] = pd.to_datetime(df["date"])
-            if start_date is not None:
-                df = df[df["date"] >= pd.Timestamp(start_date)]
-            if end_date is not None:
-                df = df[df["date"] <= pd.Timestamp(end_date)]
             return df.sort_values("date").reset_index(drop=True)
         except Exception as e:
             logger.exception("Arrow IPC 读取失败: %s", e)

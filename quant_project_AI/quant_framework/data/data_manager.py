@@ -78,9 +78,9 @@ class DataManager:
         """
         if self._cache is not None:
             key = _data_key(symbol, start_date, end_date)
-            data = self._cache.get(key)
+            data = self._cache.get(key, copy=True)
             if data is not None:
-                return data.copy() if isinstance(data, pd.DataFrame) else data
+                return data
             data = self.dataset.load(symbol, start_date, end_date)
             if data is not None and not data.empty:
                 self._cache.put(key, data)
@@ -134,8 +134,25 @@ class DataManager:
 
         Returns ``{col_name: np.ndarray}`` with float64 arrays for numeric
         columns.  Uses Polars zero-copy when available.
+
+        Falls back through the cached pandas path when the direct Polars /
+        binary route misses, so repeated symbol loads hit the cache.
         """
-        return self.dataset.load_arrays(symbol, start_date, end_date, columns)
+        try:
+            result = self.dataset.load_arrays(symbol, start_date, end_date, columns)
+            if result:
+                return result
+        except Exception:
+            pass
+
+        df = self.load_data(symbol, start_date, end_date)
+        if df is None or df.empty:
+            return {}
+        cols = columns or [c for c in df.columns if c != "date"]
+        return {
+            c: np.ascontiguousarray(df[c].values, dtype=np.float64)
+            for c in cols if c in df.columns and np.issubdtype(df[c].dtype, np.number)
+        }
 
     # ── Feature engineering ──────────────────────────────────────
 

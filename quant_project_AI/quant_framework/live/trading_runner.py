@@ -743,9 +743,12 @@ class TradingRunner:
         if not self._on_update:
             return
         try:
+            loop = asyncio.get_event_loop()
             result = self._on_update()
             if asyncio.iscoroutine(result):
                 await result
+            elif callable(result):
+                await loop.run_in_executor(None, result)
         except Exception as e:
             logger.debug("Update callback error: %s", e)
 
@@ -827,10 +830,18 @@ class TradingRunner:
             self._kill_switch_in_progress = False
 
     def activate_kill_switch(self, reason: str = "Manual dashboard activation") -> Dict[str, Any]:
-        """Thread-safe kill switch entrypoint for the dashboard/UI layer."""
+        """Thread-safe kill switch entrypoint for the dashboard/UI layer.
+
+        Uses a short poll loop so the calling thread (Dash callback) is not
+        blocked for up to 15 s — it checks every 0.25 s and returns as soon
+        as the coroutine finishes.
+        """
         if self._loop is not None and self._loop.is_running():
             fut = asyncio.run_coroutine_threadsafe(self._activate_kill_switch(reason), self._loop)
-            return fut.result(timeout=15)
+            try:
+                return fut.result(timeout=15)
+            except TimeoutError:
+                return {"status": "timeout", "message": "kill switch timed out after 15s"}
         return asyncio.run(self._activate_kill_switch(reason))
 
     async def stop(self) -> None:

@@ -90,9 +90,8 @@ class _RollingWindow:
         self._dates: List[Any] = [None] * maxlen
         self._count = 0
         self._write = 0
-        self._df_dirty = True
+        self._dirty = True
         self._df_cache: Optional[pd.DataFrame] = None
-        self._arr_dirty = True
         self._arr_cache: Optional[Dict[str, np.ndarray]] = None
 
     def append(self, bar: BarEvent) -> None:
@@ -106,44 +105,46 @@ class _RollingWindow:
         self._write = (w + 1) % self._maxlen
         if self._count < self._maxlen:
             self._count += 1
-        self._df_dirty = True
-        self._arr_dirty = True
+        self._dirty = True
+        self._df_cache = None
 
-    def _ordered_slice(self, arr: np.ndarray) -> np.ndarray:
-        """Return a contiguous copy of the ring buffer in chronological order."""
+    def _rebuild_arrays(self) -> None:
+        """Rebuild the ordered array cache (single copy per column)."""
+        if not self._dirty and self._arr_cache is not None:
+            return
         n = self._count
         if n == 0:
-            return np.empty(0, dtype=np.float64)
-        if n < self._maxlen:
-            return arr[:n].copy()
-        start = self._write
-        return np.concatenate((arr[start:], arr[:start]))
+            self._arr_cache = {c: np.empty(0, dtype=np.float64) for c in self._COLS}
+        elif n < self._maxlen:
+            self._arr_cache = {c: self._buf[c][:n].copy() for c in self._COLS}
+        else:
+            s = self._write
+            self._arr_cache = {
+                c: np.concatenate((self._buf[c][s:], self._buf[c][:s]))
+                for c in self._COLS
+            }
+        self._dirty = False
 
     def to_dataframe(self) -> pd.DataFrame:
-        if not self._df_dirty and self._df_cache is not None:
+        if self._df_cache is not None:
             return self._df_cache
-        if self._count == 0:
-            self._df_cache = pd.DataFrame(columns=["date"] + list(self._COLS))
-            self._df_dirty = False
-            return self._df_cache
-        data: Dict[str, Any] = {}
-        for c in self._COLS:
-            data[c] = self._ordered_slice(self._buf[c])
+        self._rebuild_arrays()
+        assert self._arr_cache is not None
+        data: Dict[str, Any] = dict(self._arr_cache)
         n = self._count
-        if n < self._maxlen:
+        if n == 0:
+            data["date"] = []
+        elif n < self._maxlen:
             data["date"] = self._dates[:n]
         else:
             s = self._write
             data["date"] = self._dates[s:] + self._dates[:s]
         self._df_cache = pd.DataFrame(data)
-        self._df_dirty = False
         return self._df_cache
 
     def to_arrays(self) -> Dict[str, np.ndarray]:
-        if not self._arr_dirty and self._arr_cache is not None:
-            return self._arr_cache
-        self._arr_cache = {c: self._ordered_slice(self._buf[c]) for c in self._COLS}
-        self._arr_dirty = False
+        self._rebuild_arrays()
+        assert self._arr_cache is not None
         return self._arr_cache
 
     def __len__(self) -> int:
@@ -177,17 +178,26 @@ class YFinanceFeed:
             df.columns = [col[0] for col in df.columns]
         return df
 
-    async def start(self, lookback: int = 200) -> None:
+    @staticmethod
+    def _yf_history(symbol: str, period: str, interval: str) -> Optional[pd.DataFrame]:
+        """Blocking yfinance call — run via ``run_in_executor``."""
         import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval=interval)
+        if df is None or df.empty:
+            df = yf.download(symbol, period=period, interval=interval,
+                             progress=False, auto_adjust=True)
+        return df
+
+    async def start(self, lookback: int = 200) -> None:
         period = "5d" if self._interval == "1m" else "60d"
         try:
-            ticker = yf.Ticker(self._symbol)
-            df = ticker.history(period=period, interval=self._interval)
-            if df is None or df.empty:
-                df = yf.download(self._symbol, period=period, interval=self._interval,
-                                 progress=False, auto_adjust=True)
-                if df is not None and not df.empty:
-                    df = self._flatten_columns(df)
+            loop = asyncio.get_event_loop()
+            df = await loop.run_in_executor(
+                None, self._yf_history, self._symbol, period, self._interval
+            )
+            if df is not None and not df.empty:
+                df = self._flatten_columns(df)
             if df is not None and not df.empty:
                 df = df.tail(lookback).reset_index()
                 date_col = "Datetime" if "Datetime" in df.columns else "Date"
@@ -222,7 +232,6 @@ class YFinanceFeed:
         return dtime(9, 30) <= t <= dtime(16, 0)
 
     async def bars(self) -> AsyncIterator[BarEvent]:
-        import yfinance as yf
         while self._running:
             await asyncio.sleep(self._poll_seconds)
             if not self._running:
@@ -233,13 +242,12 @@ class YFinanceFeed:
                 continue
 
             try:
-                ticker = yf.Ticker(self._symbol)
-                df = ticker.history(period="1d", interval=self._interval)
-                if df is None or df.empty:
-                    df = yf.download(self._symbol, period="1d", interval=self._interval,
-                                     progress=False, auto_adjust=True)
-                    if df is not None and not df.empty:
-                        df = self._flatten_columns(df)
+                loop = asyncio.get_event_loop()
+                df = await loop.run_in_executor(
+                    None, self._yf_history, self._symbol, "1d", self._interval
+                )
+                if df is not None and not df.empty:
+                    df = self._flatten_columns(df)
                 if df is None or df.empty:
                     continue
                 df = df.reset_index()
@@ -263,7 +271,6 @@ class YFinanceFeed:
 
     async def start_tick_polling(self) -> None:
         """Poll for real-time price updates between bar intervals."""
-        import yfinance as yf
         while self._running:
             await asyncio.sleep(self.TICK_POLL_SECONDS)
             if not self._running or not self._tick_callbacks:
@@ -272,9 +279,15 @@ class YFinanceFeed:
             if not is_crypto and not self._is_us_market_hours():
                 continue
             try:
-                ticker = yf.Ticker(self._symbol)
-                info = ticker.fast_info
-                price = float(info.get("lastPrice", 0) or info.get("last_price", 0))
+                import yfinance as yf
+
+                def _fetch_tick(sym: str) -> float:
+                    t = yf.Ticker(sym)
+                    fi = t.fast_info
+                    return float(fi.get("lastPrice", 0) or fi.get("last_price", 0))
+
+                loop = asyncio.get_event_loop()
+                price = await loop.run_in_executor(None, _fetch_tick, self._symbol)
                 if price <= 0:
                     continue
                 tick = TickEvent(
@@ -392,11 +405,19 @@ class BinanceFeed:
                             await self._dispatch_tick(tick)
             except Exception as e:
                 if self._running:
-                    backoff = min(2 ** getattr(self, '_reconnect_attempts', 0), 60)
-                    self._reconnect_attempts = getattr(self, '_reconnect_attempts', 0) + 1
+                    attempts = getattr(self, '_reconnect_attempts', 0) + 1
+                    self._reconnect_attempts = attempts
+                    if attempts > 20:
+                        logger.error(
+                            "Binance WS %s: exceeded 20 reconnect attempts, stopping",
+                            self._symbol,
+                        )
+                        self._running = False
+                        break
+                    backoff = min(2 ** (attempts - 1), 60)
                     logger.warning(
-                        "Binance WS %s error, reconnecting in %ds: %s",
-                        self._symbol, backoff, e,
+                        "Binance WS %s error (%d/%d), reconnecting in %ds: %s",
+                        self._symbol, attempts, 20, backoff, e,
                     )
                     await asyncio.sleep(backoff)
                 else:
@@ -631,11 +652,18 @@ class BinanceCombinedFeed:
                             await self._dispatch_tick(tick)
             except Exception as e:
                 if self._running:
-                    backoff = min(2 ** self._reconnect_attempts, 60)
                     self._reconnect_attempts += 1
+                    if self._reconnect_attempts > 20:
+                        logger.error(
+                            "BinanceCombined WS %s: exceeded 20 reconnect attempts, stopping",
+                            self._symbol,
+                        )
+                        self._running = False
+                        break
+                    backoff = min(2 ** (self._reconnect_attempts - 1), 60)
                     logger.warning(
-                        "BinanceCombined WS %s error, reconnecting in %ds: %s",
-                        self._symbol, backoff, e,
+                        "BinanceCombined WS %s error (%d/%d), reconnecting in %ds: %s",
+                        self._symbol, self._reconnect_attempts, 20, backoff, e,
                     )
                     await asyncio.sleep(backoff)
                 else:

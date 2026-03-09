@@ -47,17 +47,35 @@ class FileDataAdapter(BaseDataAdapter):
         return os.path.join(self.data_dir, filename)
     
     def load_data(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        """Load data (加载数据). When polars is available, parquet/csv use Polars for reading then convert to Pandas."""
+        """Load data with predicate pushdown where possible.
+
+        Polars ``scan_parquet`` / ``scan_csv`` push date filters into the
+        reader so only matching row groups / rows are decoded — crucial for
+        minute-level files with 500k+ rows.
+        """
         formats = [self.preferred_format, "parquet", "csv", "hdf5"]
+        has_date_filter = bool(start_date) and bool(end_date)
         for fmt in formats:
             file_path = self._get_file_path(symbol, fmt)
             if not os.path.exists(file_path):
                 continue
             try:
                 if fmt == "parquet" and _POLARS_AVAILABLE:
-                    df = pl.read_parquet(file_path).to_pandas()
+                    lf = pl.scan_parquet(file_path)
+                    if has_date_filter:
+                        lf = lf.filter(
+                            (pl.col("date").cast(pl.Datetime) >= pl.lit(start_date).str.to_datetime())
+                            & (pl.col("date").cast(pl.Datetime) <= pl.lit(end_date).str.to_datetime())
+                        )
+                    df = lf.collect().to_pandas()
                 elif fmt == "csv" and _POLARS_AVAILABLE:
-                    df = pl.read_csv(file_path).to_pandas()
+                    lf = pl.scan_csv(file_path, try_parse_dates=True)
+                    if has_date_filter:
+                        lf = lf.filter(
+                            (pl.col("date").cast(pl.Datetime) >= pl.lit(start_date).str.to_datetime())
+                            & (pl.col("date").cast(pl.Datetime) <= pl.lit(end_date).str.to_datetime())
+                        )
+                    df = lf.collect().to_pandas()
                 elif fmt == "parquet":
                     df = pd.read_parquet(file_path)
                 elif fmt == "hdf5":
@@ -72,7 +90,8 @@ class FileDataAdapter(BaseDataAdapter):
                     df["date"] = pd.to_datetime(df["date"])
                 else:
                     raise ValueError("无法找到日期列")
-                df = df[(df["date"] >= pd.Timestamp(start_date)) & (df["date"] <= pd.Timestamp(end_date))]
+                if has_date_filter and not _POLARS_AVAILABLE:
+                    df = df[(df["date"] >= pd.Timestamp(start_date)) & (df["date"] <= pd.Timestamp(end_date))]
                 df = df.sort_values("date").reset_index(drop=True)
                 required_columns = ["date", "open", "high", "low", "close", "volume"]
                 missing = set(required_columns) - set(df.columns)

@@ -58,6 +58,7 @@ from .kernels import (
     _score,
     config_to_kernel_costs,
     eval_kernel,
+    eval_kernel_precomp,
     precompute_sparse_ema,
     precompute_sparse_ma,
     precompute_sparse_rolling_max,
@@ -422,16 +423,27 @@ def _process_one_symbol(
             **scan_kwargs,
         )
 
+        mas_va = full_mas[:, va_start:va_end] if full_mas is not None else None
+        emas_va = full_emas[:, va_start:va_end] if full_emas is not None else None
+        rsis_va = full_rsis[:, va_start:va_end] if full_rsis is not None else None
+        mas_te = full_mas[:, va_end:te_end] if full_mas is not None else None
+        emas_te = full_emas[:, va_end:te_end] if full_emas is not None else None
+        rsis_te = full_rsis[:, va_end:te_end] if full_rsis is not None else None
+
         for sn in strat_names:
             if sn not in train_results:
                 continue
             res = train_results[sn]
             total_combos += res["cnt"]
 
-            va_r, va_d, va_nt = eval_kernel(sn, res["params"], c_va, o_va, h_va, l_va,
-                                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
-            te_r, te_d, te_nt = eval_kernel(sn, res["params"], c_te, o_te, h_te, l_te,
-                                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+            va_r, va_d, va_nt = eval_kernel_precomp(
+                sn, res["params"], c_va, o_va, h_va, l_va,
+                mas=mas_va, emas=emas_va, rsis=rsis_va,
+                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
+            te_r, te_d, te_nt = eval_kernel_precomp(
+                sn, res["params"], c_te, o_te, h_te, l_te,
+                mas=mas_te, emas=emas_te, rsis=rsis_te,
+                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
 
             tr_r = res["ret"]
             if tr_r > 20.0 and va_r < -tr_r * 0.5:
