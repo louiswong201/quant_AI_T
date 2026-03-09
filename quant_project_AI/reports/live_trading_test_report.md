@@ -1,7 +1,7 @@
 # Live Trading Integration Test Report
 
-**Date**: 2026-03-05 23:32:43
-**Total Time**: 0.6s
+**Date**: 2026-03-08 23:04:34
+**Total Time**: 13.5s
 **Tests**: 8 passed, 0 failed
 
 ---
@@ -23,14 +23,14 @@
 
 | Symbol | Strategy | Lev | Trades | PnL | Return | Bars/s | CB Tripped |
 |--------|----------|-----|--------|-----|--------|--------|------------|
-| BTC | RSI | 2x | 11 | $+35,940.42 | +2.1% | 1869 | No |
-| ETH | Drift | 2x | 25 | $+3,653.70 | -24.8% | 5168 | No |
-| AAPL | Donchian | 1x | 6 | $+5,071.41 | -0.2% | 5143 | No |
-| MSFT | Bollinger | 1x | 15 | $+7,991.22 | +0.7% | 5225 | No |
-| BTC | MA | 1x | 13 | $-4,337.12 | +1.2% | 4991 | No |
-| ETH | ZScore | 3x | 26 | $+605,422.81 | +81.8% | 5365 | No |
-| AAPL | MESA | 2x | 91 | $+13,009.51 | +6.9% | 4547 | No |
-| MSFT | Drift | 1x | 24 | $+7,051.04 | +0.8% | 5863 | No |
+| BTC | RSI | 2x | 3 | $+76,270.59 | +2.1% | 106 | No |
+| ETH | Drift | 2x | 13 | $-6,511.70 | -30.5% | 231 | No |
+| AAPL | Donchian | 1x | 5 | $-6,045.54 | -1.0% | 176 | No |
+| MSFT | Bollinger | 1x | 6 | $+4,915.37 | +0.7% | 297 | No |
+| BTC | MA | 1x | 7 | $-2,081.68 | -0.3% | 357 | No |
+| ETH | ZScore | 3x | 7 | $+1,276,965.84 | +81.8% | 270 | No |
+| AAPL | MESA | 2x | 46 | $+5,734.77 | +3.8% | 114 | No |
+| MSFT | Drift | 1x | 13 | $+6,733.24 | +0.8% | 1023 | No |
 
 ## Pipeline Verification
 

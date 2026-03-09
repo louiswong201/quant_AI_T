@@ -68,8 +68,8 @@ class DataManager:
     def load_data(
         self,
         symbol: str,
-        start_date: str,
-        end_date: str,
+        start_date: str = "",
+        end_date: str = "",
     ) -> Optional[pd.DataFrame]:
         """Load OHLCV data for a symbol within a date range.
 
@@ -126,8 +126,8 @@ class DataManager:
     def load_arrays(
         self,
         symbol: str,
-        start_date: str,
-        end_date: str,
+        start_date: str = "",
+        end_date: str = "",
         columns: Optional[List[str]] = None,
     ) -> Dict[str, np.ndarray]:
         """Load data as contiguous NumPy arrays — optimal for Numba kernels.

@@ -12,18 +12,24 @@ import logging
 import platform
 import signal
 import time
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Deque, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
 from ..backtest.config import BacktestConfig
 from ..broker.base import Broker
+from ..broker.live_order_manager import LiveOrderManager
+from ..features.online_engine import FeatureSnapshot, OnlineFeatureEngine
+from .audit import AuditTrail
+from .events import InMemoryEventBus
 from .kill_switch import KillSwitch
 from .kernel_adapter import KernelAdapter, MultiTFAdapter
 from .price_feed import BarEvent, PriceFeedManager, TickEvent
 from .risk import RiskManagedBroker
+from .runtime_slo import LiveRuntimeSLO, RuntimeMetrics
 from .trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
@@ -57,6 +63,11 @@ class TradingRunner:
         symbol_size_overrides: Optional[Dict[str, float]] = None,
         equity_snapshot_interval: float = 60.0,
         on_update: Optional[Callable[[], Any]] = None,
+        order_manager: Optional[LiveOrderManager] = None,
+        audit_trail: Optional[AuditTrail] = None,
+        event_bus: Optional[InMemoryEventBus] = None,
+        feature_engine: Optional[OnlineFeatureEngine] = None,
+        slo: Optional[LiveRuntimeSLO] = None,
     ):
         self._feed = feed
         self._broker = broker
@@ -68,6 +79,11 @@ class TradingRunner:
         self._symbol_size_overrides = symbol_size_overrides or {}
         self._eq_interval = equity_snapshot_interval
         self._on_update = on_update
+        self._order_manager = order_manager or LiveOrderManager()
+        self._audit = audit_trail
+        self._event_bus = event_bus
+        self._feature_engine = feature_engine or OnlineFeatureEngine()
+        self._runtime_metrics = RuntimeMetrics(slo=slo)
         self._running = False
         self._last_eq_snapshot = 0.0
         self._bar_count = 0
@@ -83,11 +99,20 @@ class TradingRunner:
         self._kill_switch_reason = ""
         self._kill_switch_triggered_at = ""
         self._kill_switch_in_progress = False
+        self._recent_trades: Deque[Dict[str, Any]] = deque(maxlen=5000)
+        self._recent_signals: Deque[Dict[str, Any]] = deque(maxlen=5000)
+        self._equity_points: Deque[Dict[str, Any]] = deque(maxlen=5000)
+        self._daily_pnl: Dict[str, Dict[str, Any]] = {}
+        self._feature_snapshots: Dict[str, Dict[str, Any]] = {}
+        self._initial_cash = float(getattr(getattr(self._broker, "_broker", self._broker), "_initial_cash_stored", 100_000.0) or 100_000.0)
+        self._hydrate_read_models()
 
     async def run(self, lookback: int = 200) -> None:
         self._running = True
         loop = asyncio.get_running_loop()
         self._loop = loop
+        if self._event_bus is not None:
+            await self._event_bus.start()
         if platform.system() != "Windows":
             for sig_name in (signal.SIGINT, signal.SIGTERM):
                 try:
@@ -116,6 +141,156 @@ class TradingRunner:
         )
         await self._feed.run()
 
+    def _hydrate_read_models(self) -> None:
+        try:
+            eq_curve = self._journal.get_equity_curve(limit=2000)
+            for _, row in eq_curve.iterrows():
+                self._equity_points.append(
+                    {
+                        "timestamp": pd.Timestamp(row["timestamp"]).isoformat() if "timestamp" in row else "",
+                        "equity": float(row.get("equity", 0.0)),
+                        "cash": float(row.get("cash", 0.0)),
+                        "positions": row.get("positions", "{}"),
+                    }
+                )
+        except Exception:
+            pass
+        try:
+            trades = self._journal.get_trades(limit=2000)
+            if not trades.empty:
+                for _, row in trades.iloc[::-1].iterrows():
+                    self._recent_trades.append(dict(row))
+                    day = str(pd.Timestamp(row["timestamp"]).date()) if "timestamp" in row else ""
+                    bucket = self._daily_pnl.setdefault(day, {"date": day, "daily_pnl": 0.0, "n_trades": 0})
+                    bucket["daily_pnl"] += float(row.get("pnl", 0.0))
+                    bucket["n_trades"] += 1
+        except Exception:
+            pass
+        try:
+            signals = self._journal.get_signals(limit=2000)
+            if not signals.empty:
+                for _, row in signals.iloc[::-1].iterrows():
+                    self._recent_signals.append(dict(row))
+        except Exception:
+            pass
+
+    def _publish_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        if self._event_bus is not None:
+            self._event_bus.publish_nowait(event_type, payload)
+
+    def _record_signal_read_model(
+        self,
+        *,
+        symbol: str,
+        signal_type: str,
+        strategy: str,
+        params: Dict[str, Any],
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        ts = (timestamp or datetime.now(timezone.utc)).isoformat()
+        self._recent_signals.append(
+            {
+                "timestamp": ts,
+                "symbol": symbol,
+                "strategy": strategy,
+                "signal_type": signal_type,
+                "params": params,
+            }
+        )
+
+    def _record_trade_read_model(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        shares: float,
+        price: float,
+        commission: float,
+        pnl: float,
+        strategy: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        ts = (timestamp or datetime.now(timezone.utc)).isoformat()
+        row = {
+            "timestamp": ts,
+            "symbol": symbol,
+            "side": side,
+            "shares": shares,
+            "price": price,
+            "commission": commission,
+            "pnl": pnl,
+            "strategy": strategy,
+            "metadata": metadata or {},
+        }
+        self._recent_trades.append(row)
+        day = str(pd.Timestamp(ts).date())
+        bucket = self._daily_pnl.setdefault(day, {"date": day, "daily_pnl": 0.0, "n_trades": 0})
+        bucket["daily_pnl"] += float(pnl)
+        bucket["n_trades"] += 1
+
+    def _record_equity_read_model(
+        self,
+        *,
+        equity: float,
+        cash: float,
+        positions: Dict[str, Any],
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        ts = (timestamp or datetime.now(timezone.utc)).isoformat()
+        self._equity_points.append(
+            {
+                "timestamp": ts,
+                "equity": float(equity),
+                "cash": float(cash),
+                "positions": dict(positions),
+            }
+        )
+
+    async def _submit_signal(
+        self,
+        signal: Dict[str, Any],
+        *,
+        signal_ts: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        submit_started = time.perf_counter()
+        self._publish_event("order.command", {"signal": dict(signal)})
+        result = await self._order_manager.submit(self._broker, signal)
+        self._runtime_metrics.signal_to_submit.record_ms((time.perf_counter() - submit_started) * 1000.0)
+        status = str(result.get("status", "")).lower()
+        if status == "rejected":
+            self._runtime_metrics.record_order_reject()
+        elif status == "error":
+            self._runtime_metrics.record_order_error()
+        elif status == "timeout":
+            self._runtime_metrics.record_order_timeout()
+        if self._audit is not None:
+            try:
+                fill_price = result.get("fill_price")
+                signal_price = signal.get("price")
+                slippage_bps = None
+                if fill_price and signal_price:
+                    signal_price = float(signal_price)
+                    fill_price = float(fill_price)
+                    if signal_price > 0:
+                        slippage_bps = (fill_price - signal_price) / signal_price * 10000.0
+                self._audit.record_order_lifecycle(
+                    internal_id=str(result.get("order_id") or f"{signal.get('symbol','')}-{time.time_ns()}"),
+                    exchange_order_id=str(result.get("exchange_order_id", "")),
+                    signal_ts=signal_ts or datetime.now(timezone.utc),
+                    submit_ts=signal_ts or datetime.now(timezone.utc),
+                    ack_ts=datetime.now(timezone.utc),
+                    fill_ts=datetime.now(timezone.utc) if status in {"filled", "partial"} else None,
+                    fill_price=float(fill_price) if fill_price else None,
+                    signal_price=float(signal_price) if signal_price else None,
+                    latency_ms=float(result.get("latency_ms", 0.0) or 0.0),
+                    slippage_bps=slippage_bps,
+                )
+            except Exception:
+                logger.debug("audit record failure", exc_info=True)
+        self._publish_event(f"order.{status or 'unknown'}", {"signal": dict(signal), "result": dict(result)})
+        return result
+
     def _warmup_strategies(self) -> None:
         """Run kernels on loaded historical windows to initialise positions
         before the first live bar arrives."""
@@ -142,6 +317,7 @@ class TradingRunner:
 
         self._bar_count += 1
         symbol = bar.symbol
+        bar_started = time.perf_counter()
 
         adapter = self._strategies.get(symbol)
         if adapter is None:
@@ -152,13 +328,37 @@ class TradingRunner:
             if window_df.empty:
                 return
             arrs = self._feed.get_arrays(symbol, bar.interval)
+            feature_snap = self._feature_engine.update(symbol, bar.interval or "", arrs, event_time=bar.timestamp)
+            self._feature_snapshots[f"{symbol}:{bar.interval or 'default'}"] = {
+                "timestamp": feature_snap.timestamp,
+                "feature_set_version": feature_snap.feature_set_version,
+                "values": dict(feature_snap.values),
+            }
+            self._runtime_metrics.feature_freshness.record_ms(
+                max(0.0, (time.time() - bar.timestamp.timestamp()) * 1000.0)
+            )
+            self._publish_event("feature.update", {"symbol": symbol, "interval": bar.interval, "snapshot": dict(feature_snap.values)})
             sig = adapter.on_bar(window_df, symbol, bar.interval, arrays=arrs)
         else:
             window_df = self._feed.get_window(symbol)
             if window_df.empty:
                 return
             arrs = self._feed.get_arrays(symbol)
+            cfg = self._get_config(symbol)
+            feature_interval = bar.interval or (cfg.interval if cfg else "")
+            feature_snap = self._feature_engine.update(symbol, feature_interval, arrs, event_time=bar.timestamp)
+            self._feature_snapshots[f"{symbol}:{bar.interval or 'default'}"] = {
+                "timestamp": feature_snap.timestamp,
+                "feature_set_version": feature_snap.feature_set_version,
+                "values": dict(feature_snap.values),
+            }
+            self._runtime_metrics.feature_freshness.record_ms(
+                max(0.0, (time.time() - bar.timestamp.timestamp()) * 1000.0)
+            )
+            self._publish_event("feature.update", {"symbol": symbol, "interval": bar.interval, "snapshot": dict(feature_snap.values)})
             sig = adapter.generate_signal(window_df, symbol, arrays=arrs)
+
+        self._runtime_metrics.bar_to_signal.record_ms((time.perf_counter() - bar_started) * 1000.0)
 
         if sig is None:
             now = time.time()
@@ -172,15 +372,25 @@ class TradingRunner:
 
         sig["shares"] = shares
         sig["price"] = bar.close
+        sig["feature_set_version"] = self._feature_engine.feature_set_version
 
-        self._journal.record_signal(
+        self._record_signal_read_model(
             symbol=symbol,
             signal_type=sig["action"],
             strategy=sig.get("strategy", ""),
             params={"price": bar.close},
+            timestamp=bar.timestamp,
         )
+        self._journal.record_signal(
+            symbol=symbol,
+            signal_type=sig["action"],
+            strategy=sig.get("strategy", ""),
+            params={"price": bar.close, "feature_set_version": self._feature_engine.feature_set_version},
+            timestamp=bar.timestamp,
+        )
+        self._publish_event("signal.intent", {"signal": dict(sig), "timestamp": bar.timestamp.isoformat()})
 
-        result = self._broker.submit_order(sig)
+        result = await self._submit_signal(sig, signal_ts=bar.timestamp)
         status = result.get("status", "rejected")
 
         if status == "filled":
@@ -232,6 +442,18 @@ class TradingRunner:
 
             self._record_pnl_to_broker(pnl)
 
+            trade_metadata = {"realized": was_realized_close, "position_after": cur_qty}
+            self._record_trade_read_model(
+                symbol=symbol,
+                side=sig["action"],
+                shares=filled_shares,
+                price=fill_price,
+                commission=commission,
+                pnl=pnl,
+                strategy=sig.get("strategy", ""),
+                metadata=trade_metadata,
+                timestamp=bar.timestamp,
+            )
             self._journal.record_trade(
                 symbol=symbol,
                 side=sig["action"],
@@ -240,7 +462,20 @@ class TradingRunner:
                 commission=commission,
                 pnl=pnl,
                 strategy=sig.get("strategy", ""),
-                metadata={"realized": was_realized_close, "position_after": cur_qty},
+                metadata=trade_metadata,
+                timestamp=bar.timestamp,
+            )
+            self._publish_event(
+                "order.fill",
+                {
+                    "symbol": symbol,
+                    "side": sig["action"],
+                    "shares": filled_shares,
+                    "price": fill_price,
+                    "commission": commission,
+                    "pnl": pnl,
+                    "strategy": sig.get("strategy", ""),
+                },
             )
             logger.info(
                 "%s %s %s @ %.4f (%.0f shares, pnl=%.2f)",
@@ -251,13 +486,8 @@ class TradingRunner:
             logger.debug("Order rejected for %s: %s", symbol, result.get("message", ""))
 
         self._take_equity_snapshot()
-        if self._on_update:
-            try:
-                result = self._on_update()
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception as e:
-                logger.debug("Update callback error: %s", e)
+        self._invalidate_state_cache()
+        await self._run_update_callback()
 
     async def _on_tick(self, tick: TickEvent) -> None:
         """Process real-time price updates between bar closes.
@@ -272,6 +502,7 @@ class TradingRunner:
         self._tick_count += 1
         symbol = tick.symbol
         self._live_prices[symbol] = tick.price
+        self._runtime_metrics.feed_lag.record_ms(max(0.0, (time.time() - tick.timestamp.timestamp()) * 1000.0))
 
         cfg = self._get_config(symbol)
         if cfg is None:
@@ -326,8 +557,23 @@ class TradingRunner:
             "shares": abs(qty),
             "price": trigger_price,
             "strategy": f"tick_{reason}",
+            "feature_set_version": self._feature_engine.feature_set_version,
         }
-        result = self._broker.submit_order(order_sig)
+        self._record_signal_read_model(
+            symbol=symbol,
+            signal_type=action,
+            strategy=f"tick_{reason}",
+            params={"price": trigger_price, "reason": reason},
+            timestamp=tick.timestamp,
+        )
+        self._journal.record_signal(
+            symbol=symbol,
+            signal_type=action,
+            strategy=f"tick_{reason}",
+            params={"price": trigger_price, "reason": reason, "feature_set_version": self._feature_engine.feature_set_version},
+            timestamp=tick.timestamp,
+        )
+        result = await self._submit_signal(order_sig, signal_ts=tick.timestamp)
         if result.get("status") == "filled":
             fill_price = result.get("fill_price", trigger_price)
             commission = result.get("commission", 0.0)
@@ -342,17 +588,32 @@ class TradingRunner:
             self._entry_prices.pop(symbol, None)
             self._sl_triggered.pop(symbol, None)
 
+            trade_metadata = {"realized": True, "position_after": 0.0}
+            self._record_trade_read_model(
+                symbol=symbol,
+                side=action,
+                shares=filled,
+                price=fill_price,
+                commission=commission,
+                pnl=pnl,
+                strategy=f"tick_{reason}",
+                metadata=trade_metadata,
+                timestamp=tick.timestamp,
+            )
             self._journal.record_trade(
                 symbol=symbol, side=action, shares=filled,
                 price=fill_price, commission=commission, pnl=pnl,
                 strategy=f"tick_{reason}",
-                metadata={"realized": True, "position_after": 0.0},
+                metadata=trade_metadata,
+                timestamp=tick.timestamp,
             )
             logger.info(
                 "[TICK %s] %s %s @ %.4f (%.4f shares, pnl=%.2f, entry=%.4f)",
                 reason, action.upper(), symbol, fill_price, filled, pnl, entry_price,
             )
             self._take_equity_snapshot()
+            self._invalidate_state_cache()
+            await self._run_update_callback()
         else:
             self._sl_triggered.pop(symbol, None)
 
@@ -397,8 +658,11 @@ class TradingRunner:
         for sym, shares in positions.items():
             px = prices.get(sym, 0.0)
             equity += shares * px
+        self._record_equity_read_model(equity=equity, cash=cash, positions=positions)
         self._journal.record_equity(equity=equity, cash=cash, positions=positions)
+        self._publish_event("journal.equity_snapshot", {"equity": equity, "cash": cash, "positions": positions})
         self._last_eq_snapshot = time.time()
+        self._runtime_metrics.set_queue_depth(int(self._journal.get_write_metrics().get("pending_rows", 0)))
 
     def _sync_strategy_positions_to_broker(self) -> None:
         """Align adapter runtime states to the recovered broker book."""
@@ -439,6 +703,7 @@ class TradingRunner:
             for sym, price in restored.get("entry_prices", {}).items()
             if sym in restored.get("positions", {})
         }
+        self._initial_cash = float(restored.get("initial_cash", self._initial_cash))
         self._sync_strategy_positions_to_broker()
         self._invalidate_state_cache()
         logger.info(
@@ -456,10 +721,17 @@ class TradingRunner:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 loop.create_task(self._feed.stop_all())
+                if self._event_bus is not None:
+                    loop.create_task(self._event_bus.stop())
         except Exception:
             pass
         try:
             self._journal.close()
+        except Exception:
+            pass
+        try:
+            if self._audit is not None:
+                self._audit.close()
         except Exception:
             pass
 
@@ -564,7 +836,11 @@ class TradingRunner:
     async def stop(self) -> None:
         self._running = False
         await self._feed.stop_all()
+        if self._event_bus is not None:
+            await self._event_bus.stop()
         self._journal.close()
+        if self._audit is not None:
+            self._audit.close()
 
     @property
     def is_running(self) -> bool:
@@ -573,6 +849,161 @@ class TradingRunner:
     @property
     def bar_count(self) -> int:
         return self._bar_count
+
+    def get_equity_curve(self, limit: int = 1000) -> pd.DataFrame:
+        rows = list(self._equity_points)[-limit:]
+        if not rows:
+            return pd.DataFrame(columns=["timestamp", "equity", "cash", "positions"])
+        df = pd.DataFrame(rows)
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+
+    def get_recent_trades(self, limit: int = 100) -> pd.DataFrame:
+        rows = list(self._recent_trades)[-limit:]
+        if not rows:
+            return pd.DataFrame(columns=["timestamp", "symbol", "side", "shares", "price", "commission", "pnl", "strategy"])
+        df = pd.DataFrame(rows).iloc[::-1].reset_index(drop=True)
+        if "metadata" in df.columns:
+            df = df.drop(columns=["metadata"])
+        return df
+
+    def get_daily_pnl(self, days: int = 30) -> pd.DataFrame:
+        rows = sorted(self._daily_pnl.values(), key=lambda x: x["date"], reverse=True)[:days]
+        return pd.DataFrame(rows)
+
+    def _compute_trade_stats(self) -> Dict[str, Any]:
+        pnls: List[float] = []
+        commissions: List[float] = []
+        for row in self._recent_trades:
+            metadata = row.get("metadata", {}) if isinstance(row, dict) else {}
+            realized = metadata.get("realized", abs(float(row.get("pnl", 0.0) or 0.0)) > 1e-12)
+            if realized:
+                pnls.append(float(row.get("pnl", 0.0) or 0.0))
+                commissions.append(float(row.get("commission", 0.0) or 0.0))
+        if not pnls:
+            return {
+                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+                "breakeven_trades": 0, "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
+                "largest_win": 0.0, "largest_loss": 0.0, "profit_factor": 0.0,
+                "profit_factor_unbounded": False, "profit_factor_capped": False,
+                "total_pnl": 0.0, "total_commission": 0.0, "expectancy": 0.0,
+                "win_streak": 0, "loss_streak": 0,
+            }
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        breakeven = [p for p in pnls if abs(p) <= 1e-12]
+        total_win = sum(wins) if wins else 0.0
+        total_loss = abs(sum(losses)) if losses else 0.0
+        pf_unbounded = total_loss <= 1e-12 and total_win > 0
+        if total_loss > 1e-12:
+            pf_raw = total_win / total_loss
+            profit_factor = min(pf_raw, 99.99)
+            pf_capped = pf_raw > 99.99
+        else:
+            profit_factor = 99.99 if total_win > 0 else 0.0
+            pf_capped = pf_unbounded
+        max_w_streak = max_l_streak = cur_w = cur_l = 0
+        for p in pnls:
+            if p > 0:
+                cur_w += 1
+                cur_l = 0
+                max_w_streak = max(max_w_streak, cur_w)
+            elif p < 0:
+                cur_l += 1
+                cur_w = 0
+                max_l_streak = max(max_l_streak, cur_l)
+            else:
+                cur_w = cur_l = 0
+        return {
+            "total_trades": len(pnls),
+            "winning_trades": len(wins),
+            "losing_trades": len(losses),
+            "breakeven_trades": len(breakeven),
+            "win_rate": len(wins) / (len(wins) + len(losses)) * 100 if (len(wins) + len(losses)) else 0.0,
+            "avg_win": total_win / len(wins) if wins else 0.0,
+            "avg_loss": -(total_loss / len(losses)) if losses else 0.0,
+            "largest_win": max(wins) if wins else 0.0,
+            "largest_loss": min(losses) if losses else 0.0,
+            "profit_factor": profit_factor,
+            "profit_factor_unbounded": pf_unbounded,
+            "profit_factor_capped": pf_capped,
+            "total_pnl": float(sum(pnls)),
+            "total_commission": float(sum(commissions)),
+            "expectancy": float(sum(pnls) / len(pnls)),
+            "win_streak": max_w_streak,
+            "loss_streak": max_l_streak,
+        }
+
+    def _compute_strategy_trade_stats(self) -> List[Dict[str, Any]]:
+        if not self._recent_trades:
+            return []
+        rows = []
+        df = pd.DataFrame(list(self._recent_trades))
+        if df.empty:
+            return rows
+        if "metadata" in df.columns:
+            df["metadata"] = df["metadata"].apply(lambda x: x if isinstance(x, dict) else {})
+            df["realized"] = df["metadata"].apply(lambda x: bool(x.get("realized", False)))
+            df = df[df["realized"]]
+        if df.empty:
+            return rows
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        for (symbol, strategy), grp in df.groupby(["symbol", "strategy"], dropna=False):
+            pnl_series = grp["pnl"].astype(float)
+            wins = pnl_series[pnl_series > 0]
+            losses = pnl_series[pnl_series < 0]
+            total_win = float(wins.sum()) if not wins.empty else 0.0
+            total_loss = abs(float(losses.sum())) if not losses.empty else 0.0
+            pf = 99.99 if total_loss <= 1e-12 and total_win > 0 else (total_win / total_loss if total_loss > 1e-12 else 0.0)
+            cum = pnl_series.cumsum()
+            peak = cum.cummax()
+            dd = float((peak - cum).max()) if not cum.empty else 0.0
+            std = float(pnl_series.std(ddof=0)) if len(pnl_series) > 1 else 0.0
+            expectancy = float(pnl_series.mean()) if len(pnl_series) else 0.0
+            sharpe_proxy = expectancy / std if std > 1e-12 else 0.0
+            rows.append({
+                "symbol": symbol,
+                "strategy": strategy,
+                "trades": int(len(grp)),
+                "win_rate": float((pnl_series > 0).mean() * 100.0) if len(pnl_series) else 0.0,
+                "profit_factor": float(min(pf, 99.99)),
+                "total_pnl": float(pnl_series.sum()),
+                "expectancy": expectancy,
+                "sharpe_proxy": sharpe_proxy,
+                "max_dd_abs": dd,
+                "last_timestamp": grp["timestamp"].max().isoformat() if grp["timestamp"].notna().any() else "",
+            })
+        return rows
+
+    def get_health(self) -> Dict[str, Any]:
+        feed_health = self._safe_feed_health()
+        broker_summary = self._broker.get_account_summary()
+        positions = self._broker.get_positions()
+        metrics_health = self._runtime_metrics.health()
+        return {
+            "feed_healthy": bool(feed_health.get("feed_healthy", False)),
+            "broker_connected": True,
+            "open_positions": len([qty for qty in positions.values() if abs(float(qty)) > 1e-12]),
+            "margin_ratio": float(getattr(self._broker, "get_margin_ratio", lambda: 1.0)()),
+            "kill_switch_active": self._kill_switch_active,
+            "queue_depth": int(self._journal.get_write_metrics().get("pending_rows", 0)),
+            "feed": feed_health.get("feeds", {}),
+            "runtime_slo": metrics_health,
+            "broker": broker_summary,
+        }
+
+    def get_metrics(self) -> Dict[str, Any]:
+        broker_summary = self._broker.get_account_summary()
+        return {
+            **self._runtime_metrics.summary(),
+            "journal": self._journal.get_write_metrics(),
+            "feed": self._safe_feed_metrics().get("feed", {}),
+            "event_bus": self._event_bus.summary() if self._event_bus is not None else {},
+            "feature_set_version": self._feature_engine.feature_set_version,
+            "feature_snapshots": self._feature_snapshots,
+            "broker_latency": broker_summary.get("latency", {}),
+        }
 
     def get_state(self) -> Dict[str, Any]:
         now = time.time()
@@ -605,6 +1036,24 @@ class TradingRunner:
                 }
                 fusion_mode = adapter.mode
         return {"tf_positions": tf_info, "fusion_mode": fusion_mode}
+
+    def _safe_feed_health(self) -> Dict[str, Any]:
+        getter = getattr(self._feed, "get_health", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                logger.debug("feed health provider failed", exc_info=True)
+        return {"feed_healthy": True, "feeds": {}}
+
+    def _safe_feed_metrics(self) -> Dict[str, Any]:
+        getter = getattr(self._feed, "get_metrics", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                logger.debug("feed metrics provider failed", exc_info=True)
+        return {"feed": {}}
 
     def _build_strategy_performance(
         self,
@@ -672,8 +1121,8 @@ class TradingRunner:
                     "direction": "LONG" if pos > 0 else ("SHORT" if pos < 0 else "FLAT"),
                 })
 
-        # Enrich with realized strategy stats from journal.
-        strategy_stats = self._journal.get_strategy_trade_stats(limit=3000)
+        # Enrich with realized strategy stats from the in-memory read model.
+        strategy_stats = self._compute_strategy_trade_stats()
         by_symbol_name: Dict[tuple, Dict[str, Any]] = {}
         for r in rows:
             by_symbol_name[(r["symbol"], r["strategy"])] = r
@@ -742,7 +1191,7 @@ class TradingRunner:
         state = {
             "running": self._running, "bar_count": self._bar_count,
             "tick_count": self._tick_count, "cash": cash, "equity": equity,
-            "initial_cash": 100_000.0, "total_return_pct": 0.0,
+            "initial_cash": self._initial_cash, "total_return_pct": ((equity - self._initial_cash) / self._initial_cash * 100.0) if self._initial_cash else 0.0,
             "max_drawdown_pct": 0.0, "positions": positions,
             "position_details": [], "prices": prices,
             "symbols": self._feed.symbols, "trade_stats": {},
@@ -755,6 +1204,9 @@ class TradingRunner:
             "kill_switch_active": self._kill_switch_active,
             "kill_switch_reason": self._kill_switch_reason,
             "kill_switch_triggered_at": self._kill_switch_triggered_at,
+            "runtime_metrics": self.get_metrics(),
+            "feed_health": self._safe_feed_health(),
+            "feature_set_version": self._feature_engine.feature_set_version,
         }
         state.update(self._build_multi_tf_info())
         return state
@@ -770,11 +1222,11 @@ class TradingRunner:
             inner = getattr(self._broker, "_broker", None)
             if inner is not None:
                 initial_cash = getattr(inner, "_initial_cash_stored", None)
-        initial_cash = initial_cash or 100_000.0
+        initial_cash = float(initial_cash or self._initial_cash or 100_000.0)
 
         total_return_pct = ((equity - initial_cash) / initial_cash) * 100 if initial_cash else 0.0
 
-        eq_curve = self._journal.get_equity_curve(limit=500)
+        eq_curve = self.get_equity_curve(limit=500)
         max_dd_pct = 0.0
         if not eq_curve.empty and "equity" in eq_curve.columns:
             eq_vals = eq_curve["equity"].values
@@ -809,7 +1261,7 @@ class TradingRunner:
                 "weight": weight, "side": "LONG" if qty > 0 else "SHORT",
             })
 
-        trade_stats = self._journal.get_trade_stats()
+        trade_stats = self._compute_trade_stats()
 
         sl_pct = self._bt_config.stop_loss_pct if self._bt_config else None
         tp_pct = self._bt_config.take_profit_pct if self._bt_config else None
@@ -854,6 +1306,9 @@ class TradingRunner:
             "kill_switch_active": self._kill_switch_active,
             "kill_switch_reason": self._kill_switch_reason,
             "kill_switch_triggered_at": self._kill_switch_triggered_at,
+            "runtime_metrics": self.get_metrics(),
+            "feed_health": self._safe_feed_health(),
+            "feature_set_version": self._feature_engine.feature_set_version,
         }
         state.update(self._build_multi_tf_info())
         state["strategy_performance"] = self._build_strategy_performance(

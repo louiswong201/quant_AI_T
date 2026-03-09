@@ -85,9 +85,13 @@ class TradeJournal:
         self._equity_buf: List[tuple] = []
         self._signal_buf: List[tuple] = []
         self._last_flush = time.monotonic()
+        self._stop_event = threading.Event()
+        self._flush_event = threading.Event()
+        self._worker = threading.Thread(target=self._flush_worker, name="trade-journal-flush", daemon=True)
+        self._worker.start()
 
     def _maybe_flush(self) -> None:
-        """Flush pending writes if the buffer or timer threshold is reached."""
+        """Signal the background worker when buffered writes should flush."""
         with self._lock:
             total = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
             if total == 0:
@@ -95,7 +99,7 @@ class TradeJournal:
             elapsed = time.monotonic() - self._last_flush
             if total < self._FLUSH_SIZE and elapsed < self._FLUSH_INTERVAL:
                 return
-            self._flush_unlocked()
+        self._flush_event.set()
 
     def _flush(self) -> None:
         """Flush all pending writes to SQLite in a single transaction."""
@@ -127,6 +131,20 @@ class TradeJournal:
             self._signal_buf.clear()
         self._conn.commit()
         self._last_flush = time.monotonic()
+
+    def _flush_worker(self) -> None:
+        while not self._stop_event.is_set():
+            self._flush_event.wait(self._FLUSH_INTERVAL)
+            self._flush_event.clear()
+            if self._stop_event.is_set():
+                break
+            with self._lock:
+                total = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
+                if total <= 0:
+                    continue
+                elapsed = time.monotonic() - self._last_flush
+                if total >= self._FLUSH_SIZE or elapsed >= self._FLUSH_INTERVAL:
+                    self._flush_unlocked()
 
     def record_trade(
         self,
@@ -506,7 +524,22 @@ class TradeJournal:
             "current_cash": cash,
         }
 
+    def get_write_metrics(self) -> Dict[str, Any]:
+        with self._lock:
+            pending = len(self._trade_buf) + len(self._equity_buf) + len(self._signal_buf)
+            return {
+                "pending_rows": pending,
+                "trade_buffer": len(self._trade_buf),
+                "equity_buffer": len(self._equity_buf),
+                "signal_buffer": len(self._signal_buf),
+                "seconds_since_flush": max(0.0, time.monotonic() - self._last_flush),
+            }
+
     def close(self) -> None:
+        self._stop_event.set()
+        self._flush_event.set()
+        if self._worker.is_alive():
+            self._worker.join(timeout=5)
         self._flush()
         with self._lock:
             self._conn.close()

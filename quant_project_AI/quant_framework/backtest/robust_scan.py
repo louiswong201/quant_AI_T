@@ -54,16 +54,17 @@ from .kernels import (
     _atr,
     _cached_max_period,
     _clear_caches,
+    _extract_needed_windows,
     _score,
     config_to_kernel_costs,
     eval_kernel,
-    precompute_all_ema,
-    precompute_all_ma,
-    precompute_all_rsi,
-    precompute_all_rolling_std,
-    precompute_rolling_max,
-    precompute_rolling_min,
-    precompute_rolling_vol,
+    precompute_sparse_ema,
+    precompute_sparse_ma,
+    precompute_sparse_rolling_max,
+    precompute_sparse_rolling_min,
+    precompute_sparse_rolling_std,
+    precompute_sparse_rolling_vol,
+    precompute_sparse_rsi,
     precompute_up_prefix,
     scan_all_kernels,
     validate_ohlc,
@@ -361,22 +362,22 @@ def _process_one_symbol(
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
     grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
-    max_period = _cached_max_period(grids, n)
 
     _needed: set = set()
     for _sn in strat_names:
         _needed |= INDICATOR_DEPS.get(_sn, frozenset())
 
-    full_mas = precompute_all_ma(c, max_period) if "mas" in _needed else None
-    full_emas = precompute_all_ema(c, max_period) if "emas" in _needed else None
-    full_rsis = precompute_all_rsi(c, max_period) if "rsis" in _needed else None
+    _nw = _extract_needed_windows(grids, strat_names)
+    full_mas = precompute_sparse_ma(c, _nw["ma"]) if "mas" in _needed and len(_nw["ma"]) else None
+    full_emas = precompute_sparse_ema(c, _nw["ema"]) if "emas" in _needed and len(_nw["ema"]) else None
+    full_rsis = precompute_sparse_rsi(c, _nw["rsi"]) if "rsis" in _needed and len(_nw["rsi"]) else None
     full_atr10 = _atr(h, l, c, 10) if "atr" in _needed else None
     full_atr14 = _atr(h, l, c, 14) if "atr" in _needed else None
     full_atr20 = _atr(h, l, c, 20) if "atr" in _needed else None
-    full_rmax_h = precompute_rolling_max(h, max_period) if "rmax_h" in _needed else None
-    full_rmin_l = precompute_rolling_min(l, max_period) if "rmin_l" in _needed else None
-    full_stds = precompute_all_rolling_std(c, max_period) if "stds" in _needed else None
-    full_vols = precompute_rolling_vol(c, max_period) if "vols" in _needed else None
+    full_rmax_h = precompute_sparse_rolling_max(h, _nw["rmax"]) if "rmax_h" in _needed and len(_nw["rmax"]) else None
+    full_rmin_l = precompute_sparse_rolling_min(l, _nw["rmin"]) if "rmin_l" in _needed and len(_nw["rmin"]) else None
+    full_stds = precompute_sparse_rolling_std(c, _nw["std"]) if "stds" in _needed and len(_nw["std"]) else None
+    full_vols = precompute_sparse_rolling_vol(c, _nw["vol"]) if "vols" in _needed and len(_nw["vol"]) else None
     full_up = precompute_up_prefix(c) if "up_prefix" in _needed else None
 
     best_params_last: Dict[str, Any] = {sn: None for sn in strat_names}
@@ -660,6 +661,7 @@ def run_robust_scan(
         if failed:
             logger.warning("[WF] %d symbols failed: %s", len(failed), ", ".join(failed))
     else:
+        import gc as _gc
         logger.info("[WF] Serial mode: %d symbols", n_symbols)
         for sym_idx, sym in enumerate(valid_syms):
             logger.info("[WF] Symbol %d/%d: %s (%d bars)",
@@ -675,6 +677,8 @@ def run_robust_scan(
                 total_combos += sym_combos
             except Exception as exc:
                 logger.error("[WF] Symbol %s failed: %s", sym, exc)
+            if sym_idx % 5 == 4:
+                _gc.collect()
 
     result.total_combos = total_combos
     result.elapsed_seconds = time.time() - t0

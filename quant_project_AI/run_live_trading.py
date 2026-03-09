@@ -36,10 +36,16 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from quant_framework.backtest.config import BacktestConfig
+from quant_framework.broker.live_order_manager import LiveOrderManager
 from quant_framework.broker.paper import PaperBroker
+from quant_framework.features import OnlineFeatureEngine
+from quant_framework.live.audit import AuditTrail
+from quant_framework.live.events import InMemoryEventBus
+from quant_framework.live.health_server import HealthCheckServer
 from quant_framework.live.kernel_adapter import KernelAdapter, MultiTFAdapter
 from quant_framework.live.price_feed import PriceFeedManager
 from quant_framework.live.risk import CircuitBreaker, RiskConfig, RiskGate, RiskManagedBroker
+from quant_framework.live.runtime_slo import LiveRuntimeSLO
 from quant_framework.live.trade_journal import TradeJournal
 from quant_framework.live.trading_runner import TradingRunner
 
@@ -221,12 +227,20 @@ def parse_args() -> argparse.Namespace:
         help="Dashboard web server port",
     )
     p.add_argument(
+        "--health-port", type=int, default=8080,
+        help="Health/metrics HTTP port (<=0 disables server)",
+    )
+    p.add_argument(
         "--no-dashboard", action="store_true",
         help="Run without the web dashboard",
     )
     p.add_argument(
         "--db-path", type=str, default="live_trading.db",
         help="SQLite database path for trade journal",
+    )
+    p.add_argument(
+        "--audit-db-path", type=str, default="audit.db",
+        help="SQLite database path for order/event audit trail",
     )
     p.add_argument(
         "--max-daily-loss", type=float, default=0.05,
@@ -358,6 +372,15 @@ def main() -> None:
     )
 
     journal = TradeJournal(db_path=args.db_path)
+    audit = AuditTrail(db_path=args.audit_db_path)
+    event_bus = InMemoryEventBus()
+    configured_feature_version = next(
+        (rec.get("feature_set_version") for rec in best.values() if rec.get("feature_set_version")),
+        "core_v1",
+    )
+    feature_engine = OnlineFeatureEngine(feature_set_version=configured_feature_version)
+    order_manager = LiveOrderManager()
+    slo = LiveRuntimeSLO()
 
     # Use the first symbol's config as the default (for dashboard metadata)
     first_fsym = next(iter(strategies))
@@ -385,6 +408,11 @@ def main() -> None:
         symbol_configs=symbol_configs,
         position_size_pct=pos_size,
         symbol_size_overrides=symbol_size_map,
+        order_manager=order_manager,
+        audit_trail=audit,
+        event_bus=event_bus,
+        feature_engine=feature_engine,
+        slo=slo,
     )
     runner.restore_from_journal()
 
@@ -396,10 +424,10 @@ def main() -> None:
             all_fsyms = list(strategies.keys())
             app = create_app(
                 get_state=runner.get_state,
-                get_equity_curve=lambda: journal.get_equity_curve(1000),
-                get_trades=lambda limit: journal.get_trades(limit),
+                get_equity_curve=lambda: runner.get_equity_curve(1000),
+                get_trades=lambda limit: runner.get_recent_trades(limit),
                 get_window=lambda sym, iv=None: feed.get_window(sym, iv),
-                get_daily_pnl=lambda days: journal.get_daily_pnl(days),
+                get_daily_pnl=lambda days: runner.get_daily_pnl(days),
                 symbols=all_fsyms,
                 refresh_ms=2000,
                 trigger_kill_switch=runner.activate_kill_switch,
@@ -410,12 +438,28 @@ def main() -> None:
             logger.warning("Dashboard unavailable: %s  (pip install dash plotly)", e)
 
     # ── Run ──
+    async def _main() -> None:
+        health_server = None
+        if args.health_port > 0:
+            health_server = HealthCheckServer(
+                health_provider=runner.get_health,
+                metrics_provider=runner.get_metrics,
+            )
+            await health_server.start(host="127.0.0.1", port=args.health_port)
+            logger.info("Health → http://127.0.0.1:%d/health", args.health_port)
+        try:
+            await runner.run(lookback=args.lookback)
+        finally:
+            if health_server is not None:
+                await health_server.stop()
+
     try:
-        asyncio.run(runner.run(lookback=args.lookback))
+        asyncio.run(_main())
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
         journal.close()
+        audit.close()
         logger.info("Live trading stopped.")
 
 

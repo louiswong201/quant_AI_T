@@ -106,6 +106,7 @@ class ResearchDB:
                 gate_score  REAL,
                 leverage    REAL    NOT NULL DEFAULT 1,
                 interval    TEXT    NOT NULL DEFAULT '1d',
+                feature_set_version TEXT NOT NULL DEFAULT 'legacy',
                 source      TEXT    NOT NULL DEFAULT 'scan',
                 reason      TEXT
             )
@@ -119,11 +120,26 @@ class ResearchDB:
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts          TEXT    NOT NULL DEFAULT (datetime('now')),
                 config_json TEXT    NOT NULL,
+                feature_set_version TEXT NOT NULL DEFAULT 'legacy',
                 diff_json   TEXT,
                 summary     TEXT,
                 n_changes   INTEGER NOT NULL DEFAULT 0
             )
         """)
+        existing_param_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(param_history)").fetchall()
+        }
+        if "feature_set_version" not in existing_param_cols:
+            cur.execute(
+                "ALTER TABLE param_history ADD COLUMN feature_set_version TEXT NOT NULL DEFAULT 'legacy'"
+            )
+        existing_config_cols = {
+            row[1] for row in cur.execute("PRAGMA table_info(config_versions)").fetchall()
+        }
+        if "feature_set_version" not in existing_config_cols:
+            cur.execute(
+                "ALTER TABLE config_versions ADD COLUMN feature_set_version TEXT NOT NULL DEFAULT 'legacy'"
+            )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS regime_snapshots (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +251,7 @@ class ResearchDB:
         gate_score: Optional[float] = None,
         leverage: float = 1.0,
         interval: str = "1d",
+        feature_set_version: str = "legacy",
         source: str = "scan",
         reason: Optional[str] = None,
     ):
@@ -243,10 +260,10 @@ class ResearchDB:
             cur.execute(
                 """INSERT INTO param_history
                    (symbol, strategy, params, sharpe, wf_score, gate_score,
-                    leverage, interval, source, reason)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    leverage, interval, feature_set_version, source, reason)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (symbol, strategy, params_json, sharpe, wf_score, gate_score,
-                 leverage, interval, source, reason),
+                 leverage, interval, feature_set_version, source, reason),
             )
 
     def get_param_history(
@@ -277,15 +294,16 @@ class ResearchDB:
         summary: str = "",
         diff: Optional[Dict] = None,
         n_changes: int = 0,
+        feature_set_version: str = "legacy",
     ):
         config_json = json.dumps(config_dict, default=str)
         diff_json = json.dumps(diff, default=str) if diff else None
         with self._cursor() as cur:
             cur.execute(
                 """INSERT INTO config_versions
-                   (config_json, diff_json, summary, n_changes)
-                   VALUES (?,?,?,?)""",
-                (config_json, diff_json, summary, n_changes),
+                   (config_json, feature_set_version, diff_json, summary, n_changes)
+                   VALUES (?,?,?,?,?)""",
+                (config_json, feature_set_version, diff_json, summary, n_changes),
             )
 
     def get_config_versions(self, limit: int = 10) -> List[Dict[str, Any]]:

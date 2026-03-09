@@ -249,6 +249,49 @@ class RiskManagedBroker(Broker):
             res.setdefault("latency_ms", dt_ms)
         return res
 
+    async def submit_order_async(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        if self._cb is not None:
+            cb_reason = self._cb.check()
+            if cb_reason is not None:
+                self._cb._reject_count += 1
+                return {"status": "rejected", "message": cb_reason}
+
+        prices: Dict[str, float] = {}
+        sym = signal.get("symbol", "")
+        px = signal.get("price", 0.0)
+        if sym and px:
+            prices[sym] = px
+        reason = self._risk_gate.validate(
+            signal,
+            cash=self._broker.get_cash(),
+            positions=self._broker.get_positions(),
+            current_prices=prices,
+        )
+        if reason is not None:
+            if self._cb is not None:
+                self._cb._reject_count += 1
+            return {"status": "rejected", "message": f"risk_reject: {reason}"}
+
+        t0 = time.perf_counter()
+        try:
+            res = await self._broker.submit_order_async(signal)
+        except Exception as exc:
+            if self._cb is not None:
+                self._cb.record_error()
+            logger.error("Async order submission failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        self._lat.record_ms(dt_ms)
+        if self._cb is not None:
+            if isinstance(res, dict) and res.get("status") == "error":
+                self._cb.record_error()
+            else:
+                self._cb.record_success()
+        if isinstance(res, dict):
+            res.setdefault("latency_ms", dt_ms)
+        return res
+
     def get_positions(self) -> Dict[str, Union[int, float]]:
         return self._broker.get_positions()
 
@@ -261,4 +304,19 @@ class RiskManagedBroker(Broker):
         if self._cb is not None:
             out["circuit_breaker"] = self._cb.summary()
         return out
+
+    async def cancel_order_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        return await self._broker.cancel_order_async(order_id, symbol)
+
+    async def get_order_status_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        return await self._broker.get_order_status_async(order_id, symbol)
+
+    async def get_open_orders_async(self, symbol: str = "") -> List[Dict[str, Any]]:
+        return await self._broker.get_open_orders_async(symbol)
+
+    async def sync_positions(self) -> Dict[str, Union[int, float]]:
+        return await self._broker.sync_positions()
+
+    async def sync_balance(self) -> Dict[str, Any]:
+        return await self._broker.sync_balance()
 

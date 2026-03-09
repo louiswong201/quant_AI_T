@@ -314,6 +314,202 @@ def precompute_all_rolling_std(close, max_w):
     return stds
 
 
+# =====================================================================
+#  Sparse precomputation — compute only the windows actually needed
+#  by the param grids.  Combined with prange for inter-window parallelism.
+# =====================================================================
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_ma(close, windows):
+    """MA for specific window sizes only.  `windows`: int64 array."""
+    n = len(close)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_w = 0
+    for i in range(nw):
+        if windows[i] > max_w:
+            max_w = int(windows[i])
+    cs = np.empty(n + 1, dtype=np.float64)
+    cs[0] = 0.0
+    for i in range(n):
+        cs[i + 1] = cs[i] + close[i]
+    mas = np.full((max_w + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        w = int(windows[wi])
+        if w >= 2 and w <= n:
+            inv_w = 1.0 / w
+            for i in range(w - 1, n):
+                mas[w, i] = (cs[i + 1] - cs[i - w + 1]) * inv_w
+    return mas
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_ema(close, windows):
+    """EMA for specific span sizes only."""
+    n = len(close)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_s = 0
+    for i in range(nw):
+        if windows[i] > max_s:
+            max_s = int(windows[i])
+    emas = np.full((max_s + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        s = int(windows[wi])
+        if s >= 2:
+            k = 2.0 / (s + 1.0)
+            emas[s, 0] = close[0]
+            for i in range(1, n):
+                emas[s, i] = close[i] * k + emas[s, i - 1] * (1.0 - k)
+    return emas
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_rsi(close, windows):
+    """RSI (Wilder's smoothing) for specific period sizes only."""
+    n = len(close)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_p = 0
+    for i in range(nw):
+        if windows[i] > max_p:
+            max_p = int(windows[i])
+    rsi = np.full((max_p + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        p = int(windows[wi])
+        if p < 2 or n <= p:
+            continue
+        gs = 0.0
+        ls = 0.0
+        for i in range(1, p + 1):
+            d = close[i] - close[i - 1]
+            if d > 0:
+                gs += d
+            else:
+                ls -= d
+        ag = gs / p
+        al = ls / p
+        rsi[p, p] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
+        for i in range(p + 1, n):
+            d = close[i] - close[i - 1]
+            g = d if d > 0 else 0.0
+            l_ = -d if d < 0 else 0.0
+            ag = (ag * (p - 1) + g) / p
+            al = (al * (p - 1) + l_) / p
+            rsi[p, i] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
+    return rsi
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_rolling_max(arr, windows):
+    """Rolling max for specific window sizes only."""
+    n = len(arr)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_w = 0
+    for i in range(nw):
+        if windows[i] > max_w:
+            max_w = int(windows[i])
+    out = np.full((max_w + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        w = int(windows[wi])
+        if w >= 2 and w <= n:
+            rm = _rolling_max_1d(arr, w)
+            for i in range(n):
+                out[w, i] = rm[i]
+    return out
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_rolling_min(arr, windows):
+    """Rolling min for specific window sizes only."""
+    n = len(arr)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_w = 0
+    for i in range(nw):
+        if windows[i] > max_w:
+            max_w = int(windows[i])
+    out = np.full((max_w + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        w = int(windows[wi])
+        if w >= 2 and w <= n:
+            rm = _rolling_min_1d(arr, w)
+            for i in range(n):
+                out[w, i] = rm[i]
+    return out
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_rolling_std(close, windows):
+    """Rolling std for specific window sizes only."""
+    n = len(close)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_w = 0
+    for i in range(nw):
+        if windows[i] > max_w:
+            max_w = int(windows[i])
+    stds = np.full((max_w + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        w = int(windows[wi])
+        if w < 2:
+            continue
+        s = 0.0
+        s2 = 0.0
+        for i in range(n):
+            s += close[i]
+            s2 += close[i] * close[i]
+            if i >= w:
+                s -= close[i - w]
+                s2 -= close[i - w] * close[i - w]
+            if i >= w - 1:
+                m = s / w
+                stds[w, i] = np.sqrt(max(0.0, s2 / w - m * m))
+    return stds
+
+
+@njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
+def precompute_sparse_rolling_vol(close, windows):
+    """Rolling volatility for specific window sizes only."""
+    n = len(close)
+    nw = len(windows)
+    if nw == 0:
+        return np.full((1, n), np.nan, dtype=np.float64)
+    max_vp = 0
+    for i in range(nw):
+        if windows[i] > max_vp:
+            max_vp = int(windows[i])
+    rets = np.zeros(n, dtype=np.float64)
+    for i in range(1, n):
+        rets[i] = (close[i] / close[i - 1] - 1.0) if close[i - 1] > 0 else 0.0
+    vols = np.full((max_vp + 1, n), np.nan, dtype=np.float64)
+    for wi in prange(nw):
+        vp = int(windows[wi])
+        if vp < 2:
+            continue
+        s = 0.0
+        s2 = 0.0
+        for i in range(vp):
+            s += rets[i]
+            s2 += rets[i] * rets[i]
+        if vp > 0:
+            m = s / vp
+            vols[vp, vp - 1] = np.sqrt(max(1e-20, s2 / vp - m * m))
+        for i in range(vp, n):
+            s += rets[i] - rets[i - vp]
+            s2 += rets[i] * rets[i] - rets[i - vp] * rets[i - vp]
+            m = s / vp
+            vols[vp, i] = np.sqrt(max(1e-20, s2 / vp - m * m))
+    return vols
+
+
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
 def _compute_mama_fama(close):
     """Precompute MAMA/FAMA arrays for MESA strategy."""
@@ -3077,6 +3273,60 @@ def _cached_grid(grid: List[tuple]) -> np.ndarray:
     return _GRID_CACHE[gid]
 
 
+# ── Window extraction for sparse precompute ──────────────────────────
+# Maps (strategy_name, indicator_type) → grid column indices that
+# represent window sizes for that indicator.
+
+_WINDOW_COLS: Dict[str, Dict[str, List[int]]] = {
+    "MA":          {"ma": [0, 1]},
+    "RSI":         {"rsi": [0]},
+    "MACD":        {"ema": [0, 1]},
+    "RAMOM":       {"vol": [1]},
+    "Turtle":      {"rmax": [0], "rmin": [1]},
+    "Bollinger":   {"ma": [0], "std": [0]},
+    "Keltner":     {"ema": [0]},
+    "MultiFactor": {"rsi": [0], "vol": [2]},
+    "VolRegime":   {"ma": [2, 3]},
+    "Donchian":    {"rmax": [0], "rmin": [0]},
+    "ZScore":      {"ma": [0], "std": [0]},
+    "MomBreak":    {"rmax": [0], "rmin": [0]},
+    "RegimeEMA":   {"ema": [2, 3, 4]},
+    "Consensus":   {"ma": [0, 1], "rsi": [2]},
+}
+
+
+def _extract_needed_windows(
+    grids: Dict[str, List[tuple]],
+    strat_names: List[str],
+) -> Dict[str, np.ndarray]:
+    """Extract exact indicator windows required by the param grids.
+
+    Returns ``{indicator: np.ndarray(int64)}`` with only the window
+    sizes the kernels will actually index into.
+    """
+    buckets: Dict[str, set] = {
+        "ma": set(), "ema": set(), "rsi": set(),
+        "rmax": set(), "rmin": set(), "std": set(), "vol": set(),
+    }
+    for sn in strat_names:
+        grid = grids.get(sn)
+        if not grid:
+            continue
+        col_map = _WINDOW_COLS.get(sn)
+        if col_map:
+            for indicator, cols in col_map.items():
+                for p in grid:
+                    for ci in cols:
+                        buckets[indicator].add(int(p[ci]))
+        if sn == "VolRegime":
+            buckets["rsi"].add(14)
+
+    return {
+        k: np.array(sorted(v), dtype=np.int64) if v else np.empty(0, dtype=np.int64)
+        for k, v in buckets.items()
+    }
+
+
 def scan_all_kernels(
     c: np.ndarray, o: np.ndarray, h: np.ndarray, l: np.ndarray,
     config: BacktestConfig,
@@ -3127,12 +3377,6 @@ def scan_all_kernels(
 
     max_period = _cached_max_period(grids, len(c))
 
-    if mas is None:
-        mas = precompute_all_ma(c, max_period)
-    if emas is None:
-        emas = precompute_all_ema(c, max_period)
-    if rsis is None:
-        rsis = precompute_all_rsi(c, max_period)
     strat_names = strategies or [sn for sn in KERNEL_NAMES if sn in grids]
 
     # prange inside each _scan_*_njit handles parallelism; outer threading
@@ -3140,7 +3384,25 @@ def scan_all_kernels(
     n_workers = n_threads if n_threads is not None else 1
     use_threads = n_workers > 1
 
-    # ── Phase 1: precompute shared arrays based on indicator deps ──
+    # ── Phase 1: sparse precompute — only needed windows ──
+    _nw = _extract_needed_windows(grids, strat_names)
+
+    if mas is None:
+        if len(_nw["ma"]):
+            mas = precompute_sparse_ma(c, _nw["ma"])
+        else:
+            mas = np.full((1, len(c)), np.nan, dtype=np.float64)
+    if emas is None:
+        if len(_nw["ema"]):
+            emas = precompute_sparse_ema(c, _nw["ema"])
+        else:
+            emas = np.full((1, len(c)), np.nan, dtype=np.float64)
+    if rsis is None:
+        if len(_nw["rsi"]):
+            rsis = precompute_sparse_rsi(c, _nw["rsi"])
+        else:
+            rsis = np.full((1, len(c)), np.nan, dtype=np.float64)
+
     needed: set = set()
     for _sn in strat_names:
         needed |= INDICATOR_DEPS.get(_sn, frozenset())
@@ -3155,12 +3417,14 @@ def scan_all_kernels(
         if atr14 is None: atr14 = _atr(h, l, c, 14)
         if atr20 is None: atr20 = _atr(h, l, c, 20)
     if need_rmax:
-        if rmax_h is None: rmax_h = precompute_rolling_max(h, max_period)
-        if rmin_l is None: rmin_l = precompute_rolling_min(l, max_period)
-    if need_stds and stds is None:
-        stds = precompute_all_rolling_std(c, max_period)
-    if need_vols and vols is None:
-        vols = precompute_rolling_vol(c, max_period)
+        if rmax_h is None and len(_nw["rmax"]):
+            rmax_h = precompute_sparse_rolling_max(h, _nw["rmax"])
+        if rmin_l is None and len(_nw["rmin"]):
+            rmin_l = precompute_sparse_rolling_min(l, _nw["rmin"])
+    if need_stds and stds is None and len(_nw["std"]):
+        stds = precompute_sparse_rolling_std(c, _nw["std"])
+    if need_vols and vols is None and len(_nw["vol"]):
+        vols = precompute_sparse_rolling_vol(c, _nw["vol"])
     if need_up and up_prefix is None:
         up_prefix = precompute_up_prefix(c)
 

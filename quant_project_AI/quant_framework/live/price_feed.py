@@ -419,6 +419,16 @@ class BinanceFeed:
 
 _INTERVAL_RANK = {"1m": 0, "5m": 1, "15m": 2, "1h": 3, "4h": 4, "1d": 5, "1w": 6}
 
+_INTERVAL_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+    "1w": 604800,
+}
+
 
 def _symbol_to_file_prefix(symbol: str) -> str:
     """BNBUSDT -> BNB, BTCUSDT -> BTC for local file naming."""
@@ -674,6 +684,7 @@ class PriceFeedManager:
         self._on_bar_callbacks: List[Callable[[BarEvent], Any]] = []
         self._on_tick_callbacks: List[Callable[[TickEvent], Any]] = []
         self._latest_prices: Dict[str, float] = {}
+        self._feed_state: Dict[str, Dict[str, Any]] = {}
 
     def add_symbol(self, symbol: str) -> None:
         if symbol in self._feeds or symbol in self._multi_tf_feeds:
@@ -713,11 +724,30 @@ class PriceFeedManager:
         tasks += [f.start(lookback) for f in self._multi_tf_feeds.values()]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _update_price_from_tick(self, tick: TickEvent) -> None:
+    def _handle_tick(self, tick: TickEvent) -> None:
         self._latest_prices[tick.symbol] = tick.price
+        state = self._feed_state.setdefault(
+            tick.symbol,
+            {
+                "last_tick_ts": None,
+                "last_bar_ts": None,
+                "tick_count": 0,
+                "bar_count": 0,
+                "out_of_order": 0,
+                "gap_count": 0,
+                "lag_ms": 0.0,
+                "interval": self._interval,
+            },
+        )
+        state["tick_count"] += 1
+        state["lag_ms"] = max(0.0, (time.time() - tick.timestamp.timestamp()) * 1000.0)
+        last_tick = state.get("last_tick_ts")
+        if last_tick is not None and tick.timestamp <= last_tick:
+            state["out_of_order"] += 1
+        state["last_tick_ts"] = tick.timestamp
 
     async def run(self) -> None:
-        all_tick_cbs = [self._update_price_from_tick] + list(self._on_tick_callbacks)
+        all_tick_cbs = [self._handle_tick] + list(self._on_tick_callbacks)
 
         # -- single-interval feeds (legacy) --
         for feed in self._feeds.values():
@@ -726,6 +756,34 @@ class PriceFeedManager:
         async def _run_feed(feed: Any) -> None:
             async for bar in feed.bars():
                 self._latest_prices[bar.symbol] = bar.close
+                state = self._feed_state.setdefault(
+                    bar.symbol,
+                    {
+                        "last_tick_ts": None,
+                        "last_bar_ts": None,
+                        "tick_count": 0,
+                        "bar_count": 0,
+                        "out_of_order": 0,
+                        "gap_count": 0,
+                        "lag_ms": 0.0,
+                        "interval": getattr(feed, "_interval", self._interval),
+                    },
+                )
+                state["bar_count"] += 1
+                state["lag_ms"] = max(0.0, (time.time() - bar.timestamp.timestamp()) * 1000.0)
+                last_bar = state.get("last_bar_ts")
+                if last_bar is not None:
+                    if bar.timestamp <= last_bar:
+                        state["out_of_order"] += 1
+                        logger.warning("Out-of-order bar ignored for %s", bar.symbol)
+                        continue
+                    expected_sec = _INTERVAL_SECONDS.get(bar.interval or state.get("interval") or self._interval, 0)
+                    if expected_sec > 0:
+                        gap_sec = (bar.timestamp - last_bar).total_seconds()
+                        if gap_sec > expected_sec * 1.5:
+                            state["gap_count"] += 1
+                state["last_bar_ts"] = bar.timestamp
+                state["interval"] = bar.interval or state.get("interval") or self._interval
                 for cb in self._on_bar_callbacks:
                     try:
                         result = cb(bar)
@@ -744,6 +802,34 @@ class PriceFeedManager:
         # -- multi-interval feeds --
         async def _dispatch_multi_bar(bar: BarEvent) -> None:
             self._latest_prices[bar.symbol] = bar.close
+            state = self._feed_state.setdefault(
+                bar.symbol,
+                {
+                    "last_tick_ts": None,
+                    "last_bar_ts": None,
+                    "tick_count": 0,
+                    "bar_count": 0,
+                    "out_of_order": 0,
+                    "gap_count": 0,
+                    "lag_ms": 0.0,
+                    "interval": bar.interval,
+                },
+            )
+            state["bar_count"] += 1
+            state["lag_ms"] = max(0.0, (time.time() - bar.timestamp.timestamp()) * 1000.0)
+            last_bar = state.get("last_bar_ts")
+            if last_bar is not None:
+                if bar.timestamp <= last_bar:
+                    state["out_of_order"] += 1
+                    logger.warning("Out-of-order multi-TF bar ignored for %s@%s", bar.symbol, bar.interval)
+                    return
+                expected_sec = _INTERVAL_SECONDS.get(bar.interval or state.get("interval"), 0)
+                if expected_sec > 0:
+                    gap_sec = (bar.timestamp - last_bar).total_seconds()
+                    if gap_sec > expected_sec * 1.5:
+                        state["gap_count"] += 1
+            state["last_bar_ts"] = bar.timestamp
+            state["interval"] = bar.interval
             for cb in self._on_bar_callbacks:
                 try:
                     result = cb(bar)
@@ -787,6 +873,43 @@ class PriceFeedManager:
             if not df.empty:
                 prices[sym] = float(df.iloc[-1]["close"])
         return prices
+
+    def get_health(self) -> Dict[str, Any]:
+        now = time.time()
+        feeds: Dict[str, Any] = {}
+        feed_healthy = True
+        for sym, state in self._feed_state.items():
+            last_bar = state.get("last_bar_ts")
+            age_ms = None
+            if last_bar is not None:
+                age_ms = max(0.0, (now - last_bar.timestamp()) * 1000.0)
+            healthy = state.get("out_of_order", 0) == 0
+            if age_ms is not None:
+                healthy = healthy and age_ms < max(2 * _INTERVAL_SECONDS.get(state.get("interval") or self._interval, 60) * 1000.0, 30000.0)
+            feeds[sym] = {
+                "healthy": healthy,
+                "last_bar_ts": last_bar.isoformat() if last_bar is not None else "",
+                "lag_ms": float(state.get("lag_ms", 0.0)),
+                "gap_count": int(state.get("gap_count", 0)),
+                "out_of_order": int(state.get("out_of_order", 0)),
+                "interval": state.get("interval", self._interval),
+            }
+            feed_healthy = feed_healthy and healthy
+        return {"feed_healthy": feed_healthy, "feeds": feeds}
+
+    def get_metrics(self) -> Dict[str, Any]:
+        return {
+            "feed": {
+                sym: {
+                    "tick_count": int(state.get("tick_count", 0)),
+                    "bar_count": int(state.get("bar_count", 0)),
+                    "lag_ms": float(state.get("lag_ms", 0.0)),
+                    "gap_count": int(state.get("gap_count", 0)),
+                    "out_of_order": int(state.get("out_of_order", 0)),
+                }
+                for sym, state in self._feed_state.items()
+            }
+        }
 
     @property
     def symbols(self) -> List[str]:

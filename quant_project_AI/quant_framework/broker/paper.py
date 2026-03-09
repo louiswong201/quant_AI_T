@@ -148,6 +148,7 @@ class PaperBroker(Broker):
         self._orders.append({
             **copy.deepcopy(signal),
             "side": action,
+            "order_id": str(len(self._orders) + 1),
             "fill_price": exec_price,
             "filled_shares": shares,
             "commission": commission,
@@ -155,10 +156,26 @@ class PaperBroker(Broker):
         })
         return {
             "status": "filled",
+            "order_id": str(len(self._orders)),
             "fill_price": exec_price,
             "filled_shares": shares,
             "commission": commission,
         }
+
+    async def submit_order_async(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        return self.submit_order(signal)
+
+    async def cancel_order_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        return {"status": "cancelled", "order_id": order_id, "symbol": symbol or ""}
+
+    async def get_order_status_async(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
+        for order in reversed(self._orders):
+            if str(order.get("order_id", "")) == str(order_id):
+                return dict(order)
+        return {"status": "unknown", "order_id": order_id, "symbol": symbol or ""}
+
+    async def get_open_orders_async(self, symbol: str = "") -> List[Dict[str, Any]]:
+        return []
 
     def _resolve_price(self, signal: Dict[str, Any], action: str) -> float:
         if self._fill_price_cb:

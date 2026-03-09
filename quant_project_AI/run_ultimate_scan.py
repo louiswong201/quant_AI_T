@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from quant_framework.backtest import BacktestConfig, backtest_multi_tf
 from quant_framework.backtest.kernels import DEFAULT_PARAM_GRIDS, KERNEL_NAMES
 from quant_framework.backtest.robust_scan import run_robust_scan, run_cpcv_scan
+from quant_framework.features import OfflineMaterializer
 from run_full_scan import EXPANDED_GRIDS
 
 # ═══════════════════════════════════════════════════════════════
@@ -193,6 +194,8 @@ TF_COMBOS = [
     ("1h", "4h", "1d"),
 ]
 
+FEATURE_SET_VERSION = "core_v1"
+
 
 def is_crypto(sym: str) -> bool:
     return sym.upper() in CRYPTO_SYMS or sym.replace("USDT", "") in CRYPTO_SYMS
@@ -203,109 +206,20 @@ def is_crypto(sym: str) -> bool:
 # ═══════════════════════════════════════════════════════════════
 
 def load_daily(data_dir: str, min_bars: int = 400) -> Dict[str, Dict[str, np.ndarray]]:
-    """Load daily CSVs from data_dir root and data_dir/daily/."""
-    datasets = {}
-    search_dirs = [data_dir]
-    daily_subdir = os.path.join(data_dir, "daily")
-    if os.path.isdir(daily_subdir):
-        search_dirs.append(daily_subdir)
-
-    for d in search_dirs:
-        for f in sorted(os.listdir(d)):
-            if not f.endswith(".csv"):
-                continue
-            sym = f.replace(".csv", "")
-            if sym in datasets:
-                continue
-            df = pd.read_csv(os.path.join(d, f))
-            if len(df) < min_bars:
-                continue
-            for col in ("close", "open", "high", "low"):
-                if col not in df.columns:
-                    break
-            else:
-                datasets[sym] = {
-                    "c": np.ascontiguousarray(df["close"].values, dtype=np.float64),
-                    "o": np.ascontiguousarray(df["open"].values, dtype=np.float64),
-                    "h": np.ascontiguousarray(df["high"].values, dtype=np.float64),
-                    "l": np.ascontiguousarray(df["low"].values, dtype=np.float64),
-                }
-    return datasets
+    """Load daily OHLCV arrays via the canonical materializer."""
+    return OfflineMaterializer(data_dir).load_ohlcv_array_map(interval="1d", min_bars=min_bars)
 
 
 def load_intraday(data_dir: str, tf: str, min_bars: int = 400) -> Dict[str, Dict[str, np.ndarray]]:
-    tf_dir = os.path.join(data_dir, tf)
-    if not os.path.isdir(tf_dir):
-        return {}
-    datasets = {}
-    for f in sorted(os.listdir(tf_dir)):
-        if not f.endswith(".csv"):
-            continue
-        sym = f.replace(f"_{tf}.csv", "")
-        try:
-            df = pd.read_csv(os.path.join(tf_dir, f), parse_dates=["date"])
-        except Exception:
-            df = pd.read_csv(os.path.join(tf_dir, f))
-        if len(df) < min_bars:
-            continue
-        for col in ("close", "open", "high", "low"):
-            if col not in df.columns:
-                break
-        else:
-            datasets[sym] = {
-                "c": np.ascontiguousarray(df["close"].values, dtype=np.float64),
-                "o": np.ascontiguousarray(df["open"].values, dtype=np.float64),
-                "h": np.ascontiguousarray(df["high"].values, dtype=np.float64),
-                "l": np.ascontiguousarray(df["low"].values, dtype=np.float64),
-            }
-    return datasets
+    return OfflineMaterializer(data_dir).load_ohlcv_array_map(interval=tf, min_bars=min_bars)
 
 
 def load_intraday_as_df(data_dir: str, tf: str) -> Dict[str, pd.DataFrame]:
-    tf_dir = os.path.join(data_dir, tf)
-    if not os.path.isdir(tf_dir):
-        return {}
-    result = {}
-    for f in sorted(os.listdir(tf_dir)):
-        if not f.endswith(".csv"):
-            continue
-        sym = f.replace(f"_{tf}.csv", "")
-        try:
-            df = pd.read_csv(os.path.join(tf_dir, f), parse_dates=["date"])
-        except Exception:
-            df = pd.read_csv(os.path.join(tf_dir, f))
-        if len(df) < 400 or "close" not in df.columns:
-            continue
-        if "date" in df.columns:
-            df = df.set_index("date")
-        result[sym] = df
-    return result
+    return OfflineMaterializer(data_dir).load_ohlcv_frame_map(interval=tf, min_bars=400)
 
 
 def load_daily_as_df(data_dir: str) -> Dict[str, pd.DataFrame]:
-    result = {}
-    search_dirs = [data_dir]
-    daily_subdir = os.path.join(data_dir, "daily")
-    if os.path.isdir(daily_subdir):
-        search_dirs.append(daily_subdir)
-
-    for d in search_dirs:
-        for f in sorted(os.listdir(d)):
-            if not f.endswith(".csv"):
-                continue
-            sym = f.replace(".csv", "")
-            if sym in result:
-                continue
-            try:
-                df = pd.read_csv(os.path.join(d, f), parse_dates=["date"])
-            except Exception:
-                df = pd.read_csv(os.path.join(d, f))
-            if len(df) < 400 or "close" not in df.columns:
-                continue
-            if "date" in df.columns:
-                df = df.set_index("date")
-            result[sym] = df
-    return result
+    return OfflineMaterializer(data_dir).load_ohlcv_frame_map(interval="1d", min_bars=400)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -599,6 +513,7 @@ def phase4_export(
             "params": list(e["params"]) if e["params"] else [],
             "leverage": e["leverage"],
             "interval": e["tf"],
+            "feature_set_version": FEATURE_SET_VERSION,
             "cpcv_validated": e.get("cpcv_validated", False),
             "backtest_metrics": {
                 "oos_ret": round(e["oos_ret"], 2),
@@ -623,6 +538,7 @@ def phase4_export(
             "tf_combo": e["tf_combo"],
             "tf_configs": e["tf_configs"],
             "leverage": e["leverage"],
+            "feature_set_version": FEATURE_SET_VERSION,
             "backtest_metrics": {
                 "ret_pct": round(e["ret_pct"], 2),
                 "max_dd": round(e.get("max_dd", 0), 2),
@@ -643,6 +559,7 @@ def phase4_export(
     config = {
         "generated": datetime.now().isoformat(),
         "scan_type": "ULTIMATE",
+        "feature_set_version": FEATURE_SET_VERSION,
         "total_recommendations": len(recommendations),
         "single_tf_count": sum(1 for r in recommendations if r["type"] == "single-TF"),
         "multi_tf_count": sum(1 for r in recommendations if r["type"] == "multi-TF"),

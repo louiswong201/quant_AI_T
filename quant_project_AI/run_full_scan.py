@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from quant_framework.backtest import BacktestConfig
 from quant_framework.backtest.kernels import KERNEL_NAMES
 from quant_framework.backtest.robust_scan import run_robust_scan
+from quant_framework.features import OfflineMaterializer
 
 # ═══════════════════════════════════════════════════════════════
 #  EXPANDED PARAMETER GRIDS  (~50K total combos, ~6x default)
@@ -156,26 +157,8 @@ EXPANDED_GRIDS = {
 
 
 def load_all_data(data_dir: str, min_bars: int = 500):
-    """Load all CSV files from data_dir."""
-    datasets = {}
-    for f in sorted(os.listdir(data_dir)):
-        if not f.endswith(".csv"):
-            continue
-        sym = f.replace(".csv", "")
-        df = pd.read_csv(os.path.join(data_dir, f))
-        if len(df) < min_bars:
-            continue
-        for col in ("close", "open", "high", "low"):
-            if col not in df.columns:
-                break
-        else:
-            datasets[sym] = {
-                "c": df["close"].values.astype(np.float64),
-                "o": df["open"].values.astype(np.float64),
-                "h": df["high"].values.astype(np.float64),
-                "l": df["low"].values.astype(np.float64),
-            }
-    return datasets
+    """Load canonical OHLCV arrays via the offline materializer."""
+    return OfflineMaterializer(data_dir).load_ohlcv_array_map(interval="1d", min_bars=min_bars)
 
 
 def print_header(title: str, width: int = 80):

@@ -23,9 +23,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quant_framework.broker.paper import PaperBroker
+from quant_framework.broker.live_order_manager import LiveOrderManager
+from quant_framework.features import OnlineFeatureEngine
+from quant_framework.live.audit import AuditTrail
+from quant_framework.live.events import InMemoryEventBus
+from quant_framework.live.health_server import HealthCheckServer
 from quant_framework.live.kernel_adapter import KernelAdapter, MultiTFAdapter
 from quant_framework.live.price_feed import PriceFeedManager
 from quant_framework.live.risk import CircuitBreaker, RiskConfig, RiskGate, RiskManagedBroker
+from quant_framework.live.runtime_slo import LiveRuntimeSLO
 from quant_framework.live.trade_journal import TradeJournal
 from quant_framework.live.trading_runner import TradingRunner
 
@@ -73,10 +79,14 @@ def parse_args() -> argparse.Namespace:
                    help="yfinance poll interval (seconds)")
     p.add_argument("--dashboard-port", type=int, default=8050,
                    help="Dashboard web server port")
+    p.add_argument("--health-port", type=int, default=8080,
+                   help="Health/metrics HTTP port (<=0 disables)")
     p.add_argument("--no-dashboard", action="store_true",
                    help="Run without dashboard")
     p.add_argument("--db-path", type=str, default="paper_trading.db",
                    help="SQLite database path for trade journal")
+    p.add_argument("--audit-db-path", type=str, default="audit.db",
+                   help="SQLite database path for order/event audit trail")
     p.add_argument("--max-daily-loss", type=float, default=0.05,
                    help="Circuit breaker: max daily loss as fraction (0.03 = 3%%)")
     p.add_argument("--risk-config", type=str, default="",
@@ -248,6 +258,10 @@ def main() -> None:
     )
 
     journal = TradeJournal(db_path=args.db_path)
+    audit = AuditTrail(db_path=args.audit_db_path)
+    event_bus = InMemoryEventBus()
+    feature_engine = OnlineFeatureEngine()
+    order_manager = LiveOrderManager()
 
     runner = TradingRunner(
         feed=feed,
@@ -256,6 +270,11 @@ def main() -> None:
         strategies=strategies,
         bt_config=bt_config,
         position_size_pct=args.position_size,
+        order_manager=order_manager,
+        audit_trail=audit,
+        event_bus=event_bus,
+        feature_engine=feature_engine,
+        slo=LiveRuntimeSLO(),
     )
     runner.restore_from_journal()
 
@@ -265,10 +284,10 @@ def main() -> None:
 
             app = create_app(
                 get_state=runner.get_state,
-                get_equity_curve=lambda: journal.get_equity_curve(1000),
-                get_trades=lambda limit: journal.get_trades(limit),
+                get_equity_curve=lambda: runner.get_equity_curve(1000),
+                get_trades=lambda limit: runner.get_recent_trades(limit),
                 get_window=lambda sym, iv=None: feed.get_window(sym, iv),
-                get_daily_pnl=lambda days: journal.get_daily_pnl(days),
+                get_daily_pnl=lambda days: runner.get_daily_pnl(days),
                 symbols=symbols,
                 refresh_ms=2000,
                 trigger_kill_switch=runner.activate_kill_switch,
@@ -282,12 +301,28 @@ def main() -> None:
             logger.warning("Dashboard not available: %s", e)
             logger.warning("Install with: pip install dash plotly")
 
+    async def _main() -> None:
+        health_server = None
+        if args.health_port > 0:
+            health_server = HealthCheckServer(
+                health_provider=runner.get_health,
+                metrics_provider=runner.get_metrics,
+            )
+            await health_server.start(host="127.0.0.1", port=args.health_port)
+            logger.info("Health started at http://127.0.0.1:%d/health", args.health_port)
+        try:
+            await runner.run(lookback=args.lookback)
+        finally:
+            if health_server is not None:
+                await health_server.stop()
+
     try:
-        asyncio.run(runner.run(lookback=args.lookback))
+        asyncio.run(_main())
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
         journal.close()
+        audit.close()
         logger.info("Paper trading stopped.")
 
 

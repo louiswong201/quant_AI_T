@@ -64,23 +64,28 @@ class Dataset:
     def load(
         self,
         symbol: str,
-        start_date: str,
-        end_date: str,
+        start_date: str = "",
+        end_date: str = "",
         fields: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """Load OHLCV data, trying fastest backend first.
 
+        When *start_date* / *end_date* are empty strings or ``None`` the
+        full available history is returned (no date filter applied).
+
         加载顺序: fast_io 时 binary → arrow → parquet → adapter。
         """
+        sd = start_date or None
+        ed = end_date or None
         data: Optional[pd.DataFrame] = None
         if self.fast_io and self.binary_storage:
-            data = self.binary_storage.load(symbol, start_date, end_date, columns=fields)
+            data = self.binary_storage.load(symbol, sd, ed, columns=fields)
         if (data is None or data.empty) and self.fast_io and self.arrow_storage:
-            data = self.arrow_storage.load(symbol, start_date, end_date, columns=fields)
+            data = self.arrow_storage.load(symbol, sd, ed, columns=fields)
         if (data is None or data.empty) and self.use_parquet and self.parquet_storage:
-            data = self.parquet_storage.load(symbol, start_date, end_date, columns=fields)
+            data = self.parquet_storage.load(symbol, sd, ed, columns=fields)
         if data is None or data.empty:
-            data = self.adapter.load_data(symbol, start_date, end_date)
+            data = self.adapter.load_data(symbol, sd or "1900-01-01", ed or "2099-12-31")
             if data is not None and not data.empty:
                 self._backfill_storage(symbol, data)
         if data is None or data.empty:
@@ -132,25 +137,30 @@ class Dataset:
     def load_arrays(
         self,
         symbol: str,
-        start_date: str,
-        end_date: str,
+        start_date: str = "",
+        end_date: str = "",
         columns: Optional[List[str]] = None,
     ) -> dict[str, np.ndarray]:
         """Load data directly as contiguous NumPy arrays — zero-copy via Polars.
 
         Returns a dict mapping column names to np.ndarray.  Ideal for
         feeding directly into Numba-compiled strategy kernels.
+
+        *start_date* / *end_date* may be empty strings or ``None`` to
+        load the full available history.
         """
+        sd = start_date or ""
+        ed = end_date or ""
         if _POLARS_AVAILABLE and self.use_parquet and self.parquet_storage:
             import os
             fpath = os.path.join(self.data_dir, f"{symbol}.parquet")
             if os.path.exists(fpath):
                 cols = columns or ["date", "open", "high", "low", "close", "volume"]
                 lf = pl.scan_parquet(fpath)
-                if start_date:
-                    lf = lf.filter(pl.col("date") >= pl.lit(pd.Timestamp(start_date)))
-                if end_date:
-                    lf = lf.filter(pl.col("date") <= pl.lit(pd.Timestamp(end_date)))
+                if sd:
+                    lf = lf.filter(pl.col("date") >= pl.lit(pd.Timestamp(sd)))
+                if ed:
+                    lf = lf.filter(pl.col("date") <= pl.lit(pd.Timestamp(ed)))
                 available = lf.schema.names()
                 lf = lf.select([c for c in cols if c in available]).sort("date")
                 frame = lf.collect()
@@ -159,7 +169,7 @@ class Dataset:
                     for c in frame.columns
                 }
 
-        df = self.load(symbol, start_date, end_date)
+        df = self.load(symbol, sd, ed)
         if df.empty:
             return {}
         return {
