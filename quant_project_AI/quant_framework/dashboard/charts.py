@@ -41,6 +41,34 @@ _FONT = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif"
 _PF_CAP = 99.99
 
 
+def _fmt_qty(q: float) -> str:
+    """Adaptive quantity formatting: fractional crypto vs integer stocks."""
+    a = abs(q)
+    if a < 1e-12:
+        return "0"
+    if a < 0.001:
+        return f"{a:.6f}"
+    if a < 1.0:
+        return f"{a:.4f}"
+    if a < 1000:
+        return f"{a:,.2f}"
+    return f"{a:,.0f}"
+
+
+def _fmt_price(p: float) -> str:
+    """Adaptive price formatting: sub-cent tokens through large-cap."""
+    a = abs(p)
+    if a < 1e-12:
+        return "$0"
+    if a < 0.0001:
+        return f"${p:.8f}"
+    if a < 0.01:
+        return f"${p:.6f}"
+    if a < 1.0:
+        return f"${p:.4f}"
+    return f"${p:,.2f}"
+
+
 def _safe_pf(value: Any) -> float:
     try:
         out = float(value)
@@ -224,21 +252,21 @@ def build_candlestick_chart(
         if entry:
             fig.add_hline(
                 y=entry, line=dict(color=_C["blue"], width=1.5, dash="dash"),
-                annotation_text=f"Entry ${entry:,.2f}",
+                annotation_text=f"Entry {_fmt_price(entry)}",
                 annotation=dict(font_color=_C["blue"], font_size=10, bgcolor=_C["card"]),
                 row=1, col=1,
             )
         if sl:
             fig.add_hline(
                 y=sl, line=dict(color=_C["red"], width=1.5, dash="dash"),
-                annotation_text=f"SL ${sl:,.2f}",
+                annotation_text=f"SL {_fmt_price(sl)}",
                 annotation=dict(font_color=_C["red"], font_size=10, bgcolor=_C["card"]),
                 row=1, col=1,
             )
         if tp:
             fig.add_hline(
                 y=tp, line=dict(color=_C["green"], width=1.5, dash="dash"),
-                annotation_text=f"TP ${tp:,.2f}",
+                annotation_text=f"TP {_fmt_price(tp)}",
                 annotation=dict(font_color=_C["green"], font_size=10, bgcolor=_C["card"]),
                 row=1, col=1,
             )
@@ -374,9 +402,9 @@ def build_positions_table(
     if position_details and len(position_details) > 0:
         syms = [d["symbol"] for d in position_details]
         sides = [d["side"] for d in position_details]
-        qtys = [f'{abs(d["qty"]):.0f}' for d in position_details]
-        entries = [f'${d["entry_price"]:,.2f}' if d["entry_price"] else "—" for d in position_details]
-        cur_px = [f'${d["current_price"]:,.2f}' for d in position_details]
+        qtys = [_fmt_qty(d["qty"]) for d in position_details]
+        entries = [_fmt_price(d["entry_price"]) if d["entry_price"] else "—" for d in position_details]
+        cur_px = [_fmt_price(d["current_price"]) for d in position_details]
         pnls = [f'${d["unrealized_pnl"]:+,.2f}' for d in position_details]
         pnl_pcts = [f'{d["pnl_pct"]:+.2f}%' for d in position_details]
         weights = [f'{d["weight"]:.1f}%' for d in position_details]
@@ -425,9 +453,9 @@ def build_positions_table(
             w = (val / total_equity * 100) if total_equity > 0 else 0
             syms.append(sym)
             sides.append("LONG" if sh > 0 else "SHORT")
-            qtys.append(f"{abs(sh):.0f}")
+            qtys.append(_fmt_qty(sh))
             entries.append("—")
-            cur_px.append(f"${px:,.2f}")
+            cur_px.append(_fmt_price(px))
             pnls.append("—")
             pnl_pcts.append("—")
             weights.append(f"{w:.1f}%")
@@ -577,8 +605,8 @@ def build_trade_log_table(trades_df: pd.DataFrame) -> go.Figure:
                 short_times,
                 df.get("symbol", pd.Series(dtype=str)).tolist(),
                 [s.upper() for s in sides],
-                df.get("shares", pd.Series(dtype=float)).tolist(),
-                [f"${p:,.2f}" for p in df.get("price", pd.Series(dtype=float))],
+                [_fmt_qty(s) for s in df.get("shares", pd.Series(dtype=float))],
+                [_fmt_price(p) for p in df.get("price", pd.Series(dtype=float))],
                 [f"${p:+,.2f}" for p in pnl_vals],
                 df.get("strategy", pd.Series(dtype=str)).tolist(),
             ],

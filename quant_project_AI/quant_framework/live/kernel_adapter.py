@@ -144,17 +144,23 @@ class KernelAdapter:
             cur_pos = eval_kernel_position(
                 self._name, self._kernel_params, c, o, h, l,
                 co["sb"], co["ss"], co["cm"], co["lev"], co["dc"],
-                co["sl"], co["pfrac"], co["sl_slip"],
+                co.get("dc_short", 0.0), co["sl"], co["pfrac"], co["sl_slip"],
             )
         except Exception as e:
             logger.debug("Kernel eval failed for %s/%s: %s", self._name, symbol, e)
             return None
 
         action: Optional[str] = None
+        intent: Optional[str] = None
         if cur_pos > 0 and self._prev_position <= 0:
             action = "buy"
+            intent = "open" if self._prev_position == 0 else "reverse"
         elif cur_pos < 0 and self._prev_position >= 0:
             action = "sell"
+            intent = "open" if self._prev_position == 0 else "reverse"
+        elif cur_pos == 0 and self._prev_position != 0:
+            action = "sell" if self._prev_position > 0 else "buy"
+            intent = "close"
 
         if action is None:
             self._prev_position = cur_pos
@@ -163,6 +169,7 @@ class KernelAdapter:
         self._prev_position = cur_pos
         return {
             "action": action,
+            "intent": intent,
             "symbol": symbol,
             "price": float(c[-1]),
             "strategy": self._name,
@@ -312,6 +319,13 @@ class MultiTFAdapter:
         sig = adapter.generate_signal(window_df, symbol, arrays=arrays)
         self._tf_positions[interval] = adapter.get_position()
 
+        if arrays and "close" in arrays and len(arrays["close"]) > 0:
+            close_price = float(arrays["close"][-1])
+        elif not window_df.empty and "close" in window_df.columns:
+            close_price = float(window_df["close"].iloc[-1])
+        else:
+            close_price = float(sig.get("price", 0.0)) if sig else 0.0
+
         pos_str = " | ".join(
             f"{iv}={self._tf_positions[iv]:+d}" for iv in self._sorted_intervals
         )
@@ -322,9 +336,9 @@ class MultiTFAdapter:
         )
 
         if self._mode == "trend_filter":
-            return self._fuse_trend_filter(sig, symbol, interval)
+            return self._fuse_trend_filter(sig, symbol, interval, close_price)
         elif self._mode == "consensus":
-            return self._fuse_consensus(symbol)
+            return self._fuse_consensus(symbol, close_price)
         else:
             return self._fuse_primary(sig, interval)
 
@@ -332,28 +346,29 @@ class MultiTFAdapter:
 
     def _fuse_trend_filter(
         self, lower_sig: Optional[Dict[str, Any]], symbol: str, interval: str,
+        close_price: float = 0.0,
     ) -> Optional[Dict[str, Any]]:
         """Higher TF sets trend; lower TF provides entry timing."""
         highest_iv = self._sorted_intervals[-1]
         trend = self._tf_positions.get(highest_iv, 0)
 
         if interval == highest_iv:
-            return self._emit_on_position_change(trend, symbol)
+            return self._emit_on_position_change(trend, symbol, close_price)
 
         if lower_sig is None:
             return None
 
         action = lower_sig["action"]
         if trend > 0 and action == "buy":
-            return self._emit_on_position_change(1, symbol)
+            return self._emit_on_position_change(1, symbol, close_price)
         elif trend < 0 and action == "sell":
-            return self._emit_on_position_change(-1, symbol)
+            return self._emit_on_position_change(-1, symbol, close_price)
         elif trend == 0:
-            return self._emit_on_position_change(0, symbol)
+            return self._emit_on_position_change(0, symbol, close_price)
 
         return None
 
-    def _fuse_consensus(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def _fuse_consensus(self, symbol: str, close_price: float = 0.0) -> Optional[Dict[str, Any]]:
         """Majority vote across all TF positions."""
         positions = list(self._tf_positions.values())
         n = len(positions)
@@ -374,7 +389,7 @@ class MultiTFAdapter:
                 symbol, self._prev_fused_position, fused, longs, shorts, n,
             )
 
-        return self._emit_on_position_change(fused, symbol)
+        return self._emit_on_position_change(fused, symbol, close_price)
 
     def _fuse_primary(
         self, sig: Optional[Dict[str, Any]], interval: str,
@@ -385,18 +400,22 @@ class MultiTFAdapter:
         return sig
 
     def _emit_on_position_change(
-        self, new_pos: int, symbol: str,
+        self, new_pos: int, symbol: str, close_price: float = 0.0,
     ) -> Optional[Dict[str, Any]]:
         if new_pos == self._prev_fused_position:
             return None
 
         action: Optional[str] = None
+        intent: Optional[str] = None
         if new_pos > 0 and self._prev_fused_position <= 0:
             action = "buy"
+            intent = "open" if self._prev_fused_position == 0 else "reverse"
         elif new_pos < 0 and self._prev_fused_position >= 0:
             action = "sell"
+            intent = "open" if self._prev_fused_position == 0 else "reverse"
         elif new_pos == 0:
             action = "sell" if self._prev_fused_position > 0 else "buy"
+            intent = "close"
 
         self._prev_fused_position = new_pos
         if action is None:
@@ -407,7 +426,8 @@ class MultiTFAdapter:
         )
         return {
             "action": action,
+            "intent": intent,
             "symbol": symbol,
-            "price": 0.0,
+            "price": close_price,
             "strategy": f"MultiTF[{self._mode}]({strat_names})",
         }

@@ -38,6 +38,8 @@ class PaperBroker(Broker):
         slippage_bps_sell: float = 0.0,
         allow_short: bool = False,
         allow_fractional: bool = False,
+        leverage: float = 1.0,
+        min_notional: float = 0.0,
     ):
         self._initial_cash_stored = float(initial_cash)
         self._cash = float(initial_cash)
@@ -50,6 +52,8 @@ class PaperBroker(Broker):
         self._slippage_bps_sell = float(slippage_bps_sell)
         self._allow_short = allow_short
         self._allow_fractional = allow_fractional
+        self._leverage = max(1.0, float(leverage))
+        self._min_notional = float(min_notional)
         for v in (
             self._commission_pct_buy,
             self._commission_pct_sell,
@@ -68,6 +72,7 @@ class PaperBroker(Broker):
         initial_cash: float = 0.0,
         initial_positions: Optional[Dict[str, PositionQty]] = None,
         fill_price_callback: Optional[Callable[[Dict[str, Any], str], float]] = None,
+        min_notional: float = 0.0,
     ) -> "PaperBroker":
         """Build from BacktestConfig for cost consistency between backtest and paper."""
         return cls(
@@ -80,6 +85,8 @@ class PaperBroker(Broker):
             slippage_bps_sell=config.slippage_bps_sell,
             allow_short=config.allow_short,
             allow_fractional=config.allow_fractional_shares,
+            leverage=config.leverage,
+            min_notional=min_notional,
         )
 
     def submit_order(self, signal: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,12 +104,14 @@ class PaperBroker(Broker):
         if action == "buy":
             exec_price = price * (1.0 + self._slippage_bps_buy / 10000.0)
             notional = exec_price * shares
+            if self._min_notional > 0 and notional < self._min_notional:
+                return {"status": "rejected", "message": f"notional {notional:.2f} below min {self._min_notional:.2f}"}
             commission = notional * self._commission_pct_buy
-            total_cost = notional + commission
-            if self._cash < total_cost:
-                return {"status": "rejected", "message": "insufficient cash"}
+            required_margin = notional / self._leverage + commission
+            if self._cash < required_margin:
+                return {"status": "rejected", "message": "insufficient margin"}
 
-            self._cash -= total_cost
+            self._cash -= required_margin
             old_pos = self._positions.get(symbol, 0)
             new_pos = old_pos + shares
 
@@ -127,6 +136,8 @@ class PaperBroker(Broker):
 
             exec_price = price * (1.0 - self._slippage_bps_sell / 10000.0)
             notional = exec_price * shares
+            if self._min_notional > 0 and notional < self._min_notional:
+                return {"status": "rejected", "message": f"notional {notional:.2f} below min {self._min_notional:.2f}"}
             commission = notional * self._commission_pct_sell
             self._cash += notional - commission
 

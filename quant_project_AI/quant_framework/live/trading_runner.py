@@ -105,6 +105,7 @@ class TradingRunner:
         self._daily_pnl: Dict[str, Dict[str, Any]] = {}
         self._feature_snapshots: Dict[str, Dict[str, Any]] = {}
         self._initial_cash = float(getattr(getattr(self._broker, "_broker", self._broker), "_initial_cash_stored", 100_000.0) or 100_000.0)
+        self._last_daily_reset_date: Optional[str] = None
         self._hydrate_read_models()
 
     async def run(self, lookback: int = 200) -> None:
@@ -311,10 +312,21 @@ class TradingRunner:
                         symbol, adapter.name, adapter.get_position(),
                     )
 
+    def _maybe_reset_daily_circuit_breaker(self, bar_ts: datetime) -> None:
+        today = bar_ts.strftime("%Y-%m-%d")
+        if today != self._last_daily_reset_date:
+            self._last_daily_reset_date = today
+            broker = self._broker
+            cb = getattr(broker, "_cb", None)
+            if cb is not None:
+                cb.reset_daily()
+                logger.info("CircuitBreaker daily PnL reset for %s", today)
+
     async def _on_bar(self, bar: BarEvent) -> None:
         if not self._running:
             return
 
+        self._maybe_reset_daily_circuit_breaker(bar.timestamp)
         self._bar_count += 1
         symbol = bar.symbol
         bar_started = time.perf_counter()
@@ -632,17 +644,38 @@ class TradingRunner:
         price = float(sig.get("price", 0))
         if price <= 0:
             return 0.0
-        cash = self._broker.get_cash()
+
         symbol = sig.get("symbol", "")
+        intent = sig.get("intent", "open")
+        positions = self._broker.get_positions()
+        held_qty = float(positions.get(symbol, 0))
+        allow_frac = getattr(self._broker, "_allow_fractional", False)
+
+        if intent == "close":
+            return abs(held_qty) if abs(held_qty) > 1e-12 else 0.0
+
         cfg = self._get_config(symbol)
         leverage = cfg.leverage if cfg else 1.0
         size_pct = self._symbol_size_overrides.get(symbol, self._pos_size_pct)
-        notional = cash * size_pct * leverage
-        raw = notional / price
-        allow_frac = getattr(self._broker, "_allow_fractional", False)
+
+        equity = self._broker.get_cash()
+        for sym, qty in positions.items():
+            px = self._live_prices.get(sym) or self._feed.get_latest_prices().get(sym, 0.0)
+            equity += float(qty) * px
+        if equity <= 0:
+            return 0.0
+
+        new_open_notional = equity * size_pct * leverage
+        new_open_shares = new_open_notional / price
+
+        if intent == "reverse":
+            total = abs(held_qty) + new_open_shares
+        else:
+            total = new_open_shares
+
         if not allow_frac:
-            return float(max(1, int(raw)))
-        return max(1e-8, raw)
+            return float(max(1, int(total)))
+        return max(1e-8, total)
 
     def _get_prices(self) -> Dict[str, float]:
         """Merge live tick prices with feed bar prices (tick takes priority)."""

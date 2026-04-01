@@ -360,6 +360,7 @@ def _process_one_symbol(
 
     sb, ss, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
+    dc_short = costs.get("dc_short", 0.0)
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
     grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
@@ -439,11 +440,11 @@ def _process_one_symbol(
             va_r, va_d, va_nt = eval_kernel_precomp(
                 sn, res["params"], c_va, o_va, h_va, l_va,
                 mas=mas_va, emas=emas_va, rsis=rsis_va,
-                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
+                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, dc_short=dc_short, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
             te_r, te_d, te_nt = eval_kernel_precomp(
                 sn, res["params"], c_te, o_te, h_te, l_te,
                 mas=mas_te, emas=emas_te, rsis=rsis_te,
-                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
+                sb=sb, ss=ss, cm=cm, lev=lev, dc=dc, dc_short=dc_short, sl=sl, pfrac=pfrac, sl_slip=sl_slip)
 
             tr_r = res["ret"]
             if tr_r > 20.0 and va_r < -tr_r * 0.5:
@@ -822,6 +823,7 @@ def run_cpcv_scan(
     costs = config_to_kernel_costs(config)
     sb, ss, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
+    dc_short = costs.get("dc_short", 0.0)
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
     _tc = optimal_thread_config()

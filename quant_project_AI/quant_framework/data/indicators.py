@@ -28,6 +28,12 @@ try:
 except ImportError:
     NUMBA_AVAILABLE = False
 
+try:
+    import quant_core as _qc
+    _RUST_AVAILABLE = True
+except ImportError:
+    _RUST_AVAILABLE = False
+
     def njit(*args, **kwargs):  # type: ignore[misc]
         """No-op decorator when Numba is not installed."""
         def decorator(func):  # type: ignore[no-untyped-def]
@@ -602,7 +608,9 @@ class VectorizedIndicators:
     
     @staticmethod
     def ma(prices: np.ndarray, window: int) -> np.ndarray:
-        """移动平均线。优先 Numba；否则纯 NumPy（避免 pandas 在热路径）。"""
+        """移动平均线。优先 Rust > Numba > NumPy。"""
+        if _RUST_AVAILABLE:
+            return np.asarray(_qc.rust_rolling_mean(np.ascontiguousarray(prices, dtype=np.float64), window))
         if NUMBA_AVAILABLE:
             return _rolling_mean_numba(np.ascontiguousarray(prices, dtype=np.float64), window)
         n = len(prices)
@@ -615,7 +623,9 @@ class VectorizedIndicators:
     
     @staticmethod
     def rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
-        """相对强弱指标。优先 Numba；否则纯 NumPy 单循环，避免 Pandas。"""
+        """相对强弱指标。优先 Rust > Numba > NumPy。"""
+        if _RUST_AVAILABLE:
+            return np.asarray(_qc.rust_rsi(np.ascontiguousarray(prices, dtype=np.float64), period))
         if NUMBA_AVAILABLE:
             return _rsi_numba(np.ascontiguousarray(prices, dtype=np.float64), period)
         return _rsi_numpy(np.ascontiguousarray(prices, dtype=np.float64), period)
@@ -649,8 +659,10 @@ class VectorizedIndicators:
     
     @staticmethod
     def ema(prices: np.ndarray, period: int) -> np.ndarray:
-        """Exponential Moving Average — Numba-compiled, O(n) single pass."""
+        """Exponential Moving Average — Rust/Numba-compiled, O(n) single pass."""
         p = np.ascontiguousarray(prices, dtype=np.float64)
+        if _RUST_AVAILABLE:
+            return np.asarray(_qc.rust_ema(p, period))
         if NUMBA_AVAILABLE:
             return _ema_numba(p, period)
         n = len(p)
@@ -665,10 +677,12 @@ class VectorizedIndicators:
     
     @staticmethod
     def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-        """平均真实波幅。优先 Numba；否则纯 NumPy。"""
+        """平均真实波幅。优先 Rust > Numba > NumPy。"""
         h = np.ascontiguousarray(high, dtype=np.float64)
         l = np.ascontiguousarray(low, dtype=np.float64)
         c = np.ascontiguousarray(close, dtype=np.float64)
+        if _RUST_AVAILABLE:
+            return np.asarray(_qc.rust_atr(h, l, c, period))
         if NUMBA_AVAILABLE:
             return _atr_numba(h, l, c, period)
         return _atr_numpy(h, l, c, period)

@@ -105,6 +105,7 @@ class BacktestConfig:
 
     # -- Position sizing -------------------------------------------------
     position_fraction: float = 1.0
+    auto_scale_position_fraction: bool = True
 
     # -- Bar interval / annualization ------------------------------------
     interval: str = "1d"

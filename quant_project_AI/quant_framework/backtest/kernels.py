@@ -1,10 +1,14 @@
 """
-Unified Numba kernel backtest system — thread-parallel, equity-aware.
+Unified Numba/Rust kernel backtest system — thread-parallel, equity-aware.
 
 All 18 long/short leveraged strategy kernels live here as first-class
 framework components.  Each kernel runs signals + fills + PnL in a single
 compiled loop with fastmath + Numba-compiled scan.  Thread-parallel
 scanning via ThreadPoolExecutor (Numba releases GIL).
+
+When the quant_core Rust extension is installed, eval_kernel dispatches
+to the Rust implementation for higher throughput; otherwise falls back
+to the Numba path transparently.
 
 Public API
 ----------
@@ -28,6 +32,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+
+try:
+    from quant_core import eval_kernel as _rust_eval_kernel
+    _USE_RUST = True
+except ImportError:
+    _USE_RUST = False
 from numba import njit, prange
 
 from .config import BacktestConfig
@@ -455,16 +465,16 @@ def _compute_kama(close, er_p, fast_sc, slow_sc):
 # =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_turtle_precomp(c, o, atr_arr, rmax_entry, rmin_entry, rmin_exit, rmax_exit,
-                      entry_p, exit_p, atr_stop, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_turtle_precomp(c, o, h, l, atr_arr, rmax_entry, rmin_entry, rmin_exit, rmax_exit,
+                      entry_p, exit_p, atr_stop, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Turtle with precomputed rolling max/min and ATR. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(entry_p, exit_p)
     for i in range(start, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc; pend = 0
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc; pend = 0
         if liq: pos = 0; ep = 0.0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         eh = rmax_entry[i - 1]; el = rmin_entry[i - 1]
         xl = rmin_exit[i - 1]; xh = rmax_exit[i - 1]
         a = atr_arr[i]
@@ -489,13 +499,13 @@ def bt_turtle_precomp(c, o, atr_arr, rmax_entry, rmin_entry, rmin_exit, rmax_exi
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_drift_precomp(c, o, up_prefix, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_drift_precomp(c, o, h, l, up_prefix, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Drift with precomputed up-bar prefix sum. O(n) per combo."""
     n = len(c); pos = 0; ep = 0.0; tr = 1.0; pend = 0; hc = 0; pk = 1.0; mdd = 0.0; nt = 0
     for i in range(lookback, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc; pend = 0
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc; pend = 0
         if liq: pos = 0; ep = 0.0; hc = 0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         if tc2 > 0: hc = 0
         up = up_prefix[i + 1] - up_prefix[i - lookback + 1]
         ratio = up / lookback if lookback > 0 else 0.5
@@ -517,13 +527,13 @@ def bt_drift_precomp(c, o, up_prefix, lookback, drift_thr, hold_p, sb, ss, cm, l
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_ramom_precomp(c, o, mom_p, vol_arr, ez, xz, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_ramom_precomp(c, o, h, l, mom_p, vol_arr, ez, xz, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """RAMOM with precomputed rolling volatility. O(n) per combo."""
     n = len(c); pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     for i in range(mom_p, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc; pend = 0
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc; pend = 0
         if liq: pos = 0; ep = 0.0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         prev = c[i - mom_p]
         if prev <= 0: continue
         mom = (c[i] / prev) - 1.0
@@ -547,18 +557,18 @@ def bt_ramom_precomp(c, o, mom_p, vol_arr, ez, xz, sb, ss, cm, lev, dc, sl=0.80,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_mombreak_precomp(c, o, atr_arr, rh, rl, hp, prox, atr_t, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_mombreak_precomp(c, o, h, l, atr_arr, rh, rl, hp, prox, atr_t, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """MomBreak with precomputed rolling H/L and ATR. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; ts_l = 0.0; ts_s = 1e18; pk = 1.0; mdd = 0.0; nt = 0
     start = hp
     for i in range(start, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc
         if pend == 1 and atr_arr[i] == atr_arr[i]: ts_l = o[i] - atr_t * atr_arr[i]
         elif pend == -1 and atr_arr[i] == atr_arr[i]: ts_s = o[i] + atr_t * atr_arr[i]
         pend = 0
         if liq: pos = 0; ep = 0.0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         hv = rh[i]; lv = rl[i]; a = atr_arr[i]
         if hv != hv or lv != lv or a != a: pass
         else:
@@ -585,16 +595,16 @@ def bt_mombreak_precomp(c, o, atr_arr, rh, rl, hp, prox, atr_t, sb, ss, cm, lev,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_volregime_precomp(c, o, atr_arr, rsi_arr, ma_s_arr, ma_l_arr,
+def bt_volregime_precomp(c, o, h, l, atr_arr, rsi_arr, ma_s_arr, ma_l_arr,
                          vol_thr, rsi_os, rsi_ob, start,
-                         sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+                         sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """VolRegime with precomputed ATR, RSI, and MAs. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; mode = 0; pk = 1.0; mdd = 0.0; nt = 0
     for i in range(start, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc; pend = 0
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc; pend = 0
         if liq: pos = 0; ep = 0.0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         a = atr_arr[i]
         if a != a or c[i] <= 0: pass
         else:
@@ -631,16 +641,16 @@ def bt_volregime_precomp(c, o, atr_arr, rsi_arr, ma_s_arr, ma_l_arr,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_multifactor_precomp(c, o, rsi_arr, mom_p, vol_arr, lt, st,
-                           sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_multifactor_precomp(c, o, h, l, rsi_arr, mom_p, vol_arr, lt, st,
+                           sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """MultiFactor with precomputed RSI and rolling vol. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(mom_p, 2)
     for i in range(start, n):
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac); nt += tc; pend = 0
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac); nt += tc; pend = 0
         if liq: pos = 0; ep = 0.0; continue
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip); nt += tc2
         r = rsi_arr[i]
         if r != r: pass
         else:
@@ -668,17 +678,17 @@ def bt_multifactor_precomp(c, o, rsi_arr, mom_p, vol_arr, lt, st,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_macd_precomp(c, o, macd_line, sig_span, sb, ss, cm, lev, dc, stop=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_macd_precomp(c, o, h, l, macd_line, sig_span, sb, ss, cm, lev, dc, dc_short=0.0, stop=0.80, pfrac=1.0, sl_slip=0.0):
     """MACD with precomputed MACD line. Signal EMA fused into trading loop."""
     n = len(c)
     k = 2.0/(sig_span+1.0); k1 = 1.0 - k
     sp = macd_line[0]
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(1, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0
         else:
-            pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,stop,pfrac,sl_slip); nt+=tc2
+            pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,stop,pfrac,sl_slip); nt+=tc2
         mp = macd_line[i-1]
         mc = macd_line[i]
         sc = mc*k + sp*k1
@@ -702,15 +712,15 @@ def bt_macd_precomp(c, o, macd_line, sig_span, sb, ss, cm, lev, dc, stop=0.80, p
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_bollinger_precomp(c, o, ma_arr, std_arr, num_std, period,
-                         sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_bollinger_precomp(c, o, h, l, ma_arr, std_arr, num_std, period,
+                         sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Bollinger with precomputed rolling mean/std. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     for i in range(period, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m = ma_arr[i]; s = std_arr[i]
         if m!=m or s!=s or s<1e-10: pass
         else:
@@ -732,16 +742,16 @@ def bt_bollinger_precomp(c, o, ma_arr, std_arr, num_std, period,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_keltner_precomp(c, o, ema_arr, atr_arr, atr_m, ema_p, atr_p,
-                       sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_keltner_precomp(c, o, h, l, ema_arr, atr_arr, atr_m, ema_p, atr_p,
+                       sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Keltner with precomputed EMA/ATR. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(ema_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         e = ema_arr[i]; a = atr_arr[i]
         if e!=e or a!=a: pass
         else:
@@ -762,19 +772,19 @@ def bt_keltner_precomp(c, o, ema_arr, atr_arr, atr_m, ema_p, atr_p,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_donchian_precomp(c, o, dh_arr, dl_arr, atr_arr, atr_m, entry_p, atr_p,
-                        sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_donchian_precomp(c, o, h, l, dh_arr, dl_arr, atr_arr, atr_m, entry_p, atr_p,
+                        sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Donchian with precomputed rolling H/L and ATR. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; ts = 0.0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(entry_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc
         if pend==1 and atr_arr[i]==atr_arr[i]: ts=o[i]-atr_m*atr_arr[i]
         elif pend==-1 and atr_arr[i]==atr_arr[i]: ts=o[i]+atr_m*atr_arr[i]
         pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         d1 = dh_arr[i-1]; d2 = dl_arr[i-1]; a = atr_arr[i]
         if d1!=d1 or d2!=d2 or a!=a: pass
         else:
@@ -801,15 +811,15 @@ def bt_donchian_precomp(c, o, dh_arr, dl_arr, atr_arr, atr_m, entry_p, atr_p,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_zscore_precomp(c, o, rm_arr, rs_arr, lookback, ez, xz, sz,
-                      sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_zscore_precomp(c, o, h, l, rm_arr, rs_arr, lookback, ez, xz, sz,
+                      sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """ZScore with precomputed rolling mean/std. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     for i in range(lookback, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m = rm_arr[i]; sd = rs_arr[i]
         if sd==0 or sd!=sd: pass
         else:
@@ -831,16 +841,16 @@ def bt_zscore_precomp(c, o, rm_arr, rs_arr, lookback, ez, xz, sz,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_regime_ema_precomp(c, o, atr_arr, ef, es, et, vt, atr_p, se_p, te_p,
-                          sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_regime_ema_precomp(c, o, h, l, atr_arr, ef, es, et, vt, atr_p, se_p, te_p,
+                          sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """RegimeEMA with precomputed ATR and EMAs. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(atr_p, max(se_p, te_p))
     for i in range(start, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         a = atr_arr[i]
         if a!=a or c[i]<=0: pass
         else:
@@ -870,7 +880,7 @@ def bt_regime_ema_precomp(c, o, atr_arr, ef, es, et, vt, atr_p, se_p, te_p,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_mesa_precomp(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_mesa_precomp(c, o, h, l, fl, slow_lim, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """MESA kernel — kept as-is since MAMA/FAMA depend on fl parameter."""
     n = len(c)
     if n<40: return 0.0, 0.0, 0
@@ -908,9 +918,9 @@ def bt_mesa_precomp(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0,
         fama[i]=0.5*alpha*mama[i]+(1-0.5*alpha)*fama[i-1]
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(7, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         if pos==0:
             if mama[i]>fama[i] and mama[i-1]<=fama[i-1]: pend=1
             elif mama[i]<fama[i] and mama[i-1]>=fama[i-1]: pend=-1
@@ -928,16 +938,16 @@ def bt_mesa_precomp(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_kama_precomp(c, o, kama_arr, atr_arr, atr_sm,
-                    er_p, atr_p, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_kama_precomp(c, o, h, l, kama_arr, atr_arr, atr_sm,
+                    er_p, atr_p, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """KAMA with precomputed KAMA and ATR arrays. O(n) per combo."""
     n = len(c)
     pos = 0; ep = 0.0; tr = 1.0; pend = 0; pk = 1.0; mdd = 0.0; nt = 0
     start = max(er_p+2, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq = _fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2 = _sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         k = kama_arr[i]; kp = kama_arr[i-1]; a = atr_arr[i]
         if k!=k or kp!=kp or a!=a: pass
         else:
@@ -980,7 +990,7 @@ def _close_pos(pos, ep, tr, c_last, sb, ss, cm, lev, pfrac):
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _equity_from_fused_positions(fused_pos, c, o, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _equity_from_fused_positions(fused_pos, c, o, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     """Compute equity from a pre-computed fused position series.
 
     fused_pos[i] is the target position decided after bar i; execution
@@ -1008,13 +1018,13 @@ def _equity_from_fused_positions(fused_pos, c, o, sb, ss, cm, lev, dc, sl, pfrac
         else:
             pend = 0
 
-        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, pfrac)
+        pos, ep, tr, tc, liq = _fx_lev(pend, pos, ep, o[i], tr, sb, ss, cm, lev, dc, dc_short, pfrac)
         nt += tc
 
         if liq:
             pos = 0; ep = 0.0; eq_arr[i] = tr; continue
 
-        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, c[i], sb, ss, cm, lev, sl, pfrac, sl_slip)
+        pos, ep, tr, tc2 = _sl_exit(pos, ep, tr, h[i], l[i], sb, ss, cm, lev, sl, pfrac, sl_slip)
         nt += tc2
 
         eq = _mtm_lev(pos, tr, c[i], ep, sb, ss, cm, lev, sl, pfrac)
@@ -1047,10 +1057,12 @@ def _deploy(tr, pfrac):
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _fx_lev(pend, pos, ep, oi, tr, sb, ss, cm, lev, daily_cost, pfrac):
+def _fx_lev(pend, pos, ep, oi, tr, sb, ss, cm, lev, daily_cost, dc_short, pfrac):
     if pos != 0:
         deployed = _deploy(tr, pfrac)
         cost = deployed * daily_cost
+        if pos < 0:
+            cost += deployed * dc_short
         tr -= cost
         if tr < 0.01:
             return 0, 0.0, 0.01, 0, 1
@@ -1082,14 +1094,14 @@ def _fx_lev(pend, pos, ep, oi, tr, sb, ss, cm, lev, daily_cost, pfrac):
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _sl_exit(pos, ep, tr, ci, sb, ss, cm, lev, sl, pfrac, sl_slip):
+def _sl_exit(pos, ep, tr, hi, li, sb, ss, cm, lev, sl, pfrac, sl_slip):
     if pos == 0 or ep <= 0:
         return pos, ep, tr, 0
     if pos == 1:
-        raw = (ci * ss * (1.0 - cm)) / (ep * (1.0 + cm))
+        raw = (li * ss * (1.0 - cm)) / (ep * (1.0 + cm))
         pnl = (raw - 1.0) * lev
     else:
-        denom = ci * sb * (1.0 + cm)
+        denom = hi * sb * (1.0 + cm)
         raw = (ep * (1.0 - cm)) / denom if denom > 0 else 1.0
         pnl = (raw - 1.0) * lev
     if pnl >= -sl:
@@ -1123,12 +1135,12 @@ def _mtm_lev(pos, tr, ci, ep, sb, ss, cm, lev, sl, pfrac):
 # =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_ma_ls(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_ma_ls(c, o, h, l, ma_s, ma_l, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         s0=ma_s[i-1]; l0=ma_l[i-1]; s1=ma_s[i]; l1=ma_l[i]
         if s0!=s0 or l0!=l0 or s1!=s1 or l1!=l1: pass
         elif s0<=l0 and s1>l1:
@@ -1149,12 +1161,12 @@ def bt_ma_ls(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_rsi_ls(c, o, rsi, os_v, ob_v, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_rsi_ls(c, o, h, l, rsi, os_v, ob_v, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         r=rsi[i]
         if r!=r: pass
         elif r<os_v:
@@ -1177,16 +1189,16 @@ def bt_rsi_ls(c, o, rsi, os_v, ob_v, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_macd_ls(c, o, ef, es, sig_span, sb, ss, cm, lev, dc, stop=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_macd_ls(c, o, h, l, ef, es, sig_span, sb, ss, cm, lev, dc, dc_short=0.0, stop=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); ml=np.empty(n); sl=np.empty(n)
     for i in range(n): ml[i]=ef[i]-es[i]
     k=2.0/(sig_span+1.0); sl[0]=ml[0]
     for i in range(1,n): sl[i]=ml[i]*k+sl[i-1]*(1-k)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,stop,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,stop,pfrac,sl_slip); nt+=tc2
         mp=ml[i-1]; sp=sl[i-1]; mc=ml[i]; sc=sl[i]
         if mp!=mp or sp!=sp or mc!=mc or sc!=sc: pass
         elif mp<=sp and mc>sc:
@@ -1207,12 +1219,12 @@ def bt_macd_ls(c, o, ef, es, sig_span, sb, ss, cm, lev, dc, stop=0.80, pfrac=1.0
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_drift_ls(c, o, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_drift_ls(c, o, h, l, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); pos=0; ep=0.0; tr=1.0; pend=0; hc=0; pk=1.0; mdd=0.0; nt=0
     for i in range(lookback, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; hc=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         if tc2>0: hc=0
         up=0
         for j in range(1, lookback+1):
@@ -1236,13 +1248,13 @@ def bt_drift_ls(c, o, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, sl=0.80,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_ramom_ls(c, o, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_ramom_ls(c, o, h, l, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(mom_p, vol_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         prev_r=c[i-mom_p]
         if prev_r<=0: continue
         mom=(c[i]/prev_r)-1.0
@@ -1269,14 +1281,14 @@ def bt_ramom_ls(c, o, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, sl=0.80, pfrac=
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_turtle_ls(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_turtle_ls(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); aa=_atr(h,l,c,atr_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(entry_p, exit_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         eh=-1e18; el=1e18
         for j in range(1, entry_p+1):
             if h[i-j]>eh: eh=h[i-j]
@@ -1307,13 +1319,13 @@ def bt_turtle_ls(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, 
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_bollinger_ls(c, o, period, num_std, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_bollinger_ls(c, o, h, l, period, num_std, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); ma=_rolling_mean(c,period); sd=_rolling_std(c,period)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(period, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m=ma[i]; s=sd[i]
         if m!=m or s!=s or s<1e-10: pass
         else:
@@ -1335,14 +1347,14 @@ def bt_bollinger_ls(c, o, period, num_std, sb, ss, cm, lev, dc, sl=0.80, pfrac=1
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_keltner_ls(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_keltner_ls(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); ea=_ema(c,ema_p); aa=_atr(h,l,c,atr_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(ema_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         e=ea[i]; a=aa[i]
         if e!=e or a!=a: pass
         else:
@@ -1363,14 +1375,14 @@ def bt_keltner_ls(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl=0.80,
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_multifactor_ls(c, o, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_multifactor_ls(c, o, h, l, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); rsi=_rsi_wilder(c,rsi_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(rsi_p+1, mom_p, vol_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         r=rsi[i]
         if r!=r: pass
         else:
@@ -1397,15 +1409,15 @@ def bt_multifactor_ls(c, o, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, sl
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_volregime_ls(c, o, h, l, atr_p, vol_thr, ma_s, ma_l, rsi_p, rsi_os, rsi_ob, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_volregime_ls(c, o, h, l, atr_p, vol_thr, ma_s, ma_l, rsi_p, rsi_os, rsi_ob, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); aa=_atr(h,l,c,atr_p); ra=_rsi_wilder(c,rsi_p)
     ms_a=_rolling_mean(c,ma_s); ml_a=_rolling_mean(c,ma_l)
     pos=0; ep=0.0; tr=1.0; pend=0; mode=0; pk=1.0; mdd=0.0; nt=0
     start=max(atr_p,rsi_p+1,ma_l)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         a=aa[i]
         if a!=a or c[i]<=0: pass
         else:
@@ -1442,7 +1454,7 @@ def bt_volregime_ls(c, o, h, l, atr_p, vol_thr, ma_s, ma_l, rsi_p, rsi_os, rsi_o
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_mesa_ls(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_mesa_ls(c, o, h, l, fl, slow_lim, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<40: return 0.0, 0.0, 0
     smooth=np.zeros(n); det=np.zeros(n); I1=np.zeros(n); Q1=np.zeros(n)
@@ -1479,9 +1491,9 @@ def bt_mesa_ls(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_s
         fama[i]=0.5*alpha*mama[i]+(1-0.5*alpha)*fama[i-1]
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(7, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         if pos==0:
             if mama[i]>fama[i] and mama[i-1]<=fama[i-1]: pend=1
             elif mama[i]<fama[i] and mama[i-1]>=fama[i-1]: pend=-1
@@ -1499,7 +1511,7 @@ def bt_mesa_ls(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_s
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_kama_ls(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_kama_ls(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<er_p+2: return 0.0, 0.0, 0
     fc=2.0/(fast_sc+1.0); sc_v=2.0/(slow_sc+1.0)
@@ -1513,9 +1525,9 @@ def bt_kama_ls(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, le
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(er_p+2, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         k=kama[i]; kp=kama[i-1]; a=av[i]
         if k!=k or kp!=kp or a!=a: pass
         else:
@@ -1538,7 +1550,7 @@ def bt_kama_ls(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, le
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_donchian_ls(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_donchian_ls(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<entry_p+atr_p: return 0.0, 0.0, 0
     av=_atr(h,l,c,atr_p)
@@ -1552,12 +1564,12 @@ def bt_donchian_ls(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl=0.
     pos=0; ep=0.0; tr=1.0; pend=0; ts=0.0; pk=1.0; mdd=0.0; nt=0
     start=max(entry_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc
         if pend==1 and av[i]==av[i]: ts=o[i]-atr_m*av[i]
         elif pend==-1 and av[i]==av[i]: ts=o[i]+atr_m*av[i]
         pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         d1=dh[i-1]; d2=dl[i-1]; a=av[i]
         if d1!=d1 or d2!=d2 or a!=a: pass
         else:
@@ -1584,7 +1596,7 @@ def bt_donchian_ls(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl=0.
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_zscore_ls(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_zscore_ls(c, o, h, l, lookback, ez, xz, sz, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<lookback+2: return 0.0, 0.0, 0
     rm=np.full(n,np.nan); rs=np.full(n,np.nan); s=0.0; s2=0.0
@@ -1594,9 +1606,9 @@ def bt_zscore_ls(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl=0.80, pfrac
         if i>=lookback-1: m=s/lookback; rm[i]=m; rs[i]=np.sqrt(max(0.0,s2/lookback-m*m))
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(lookback, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m=rm[i]; sd=rs[i]
         if sd==0 or sd!=sd: pass
         else:
@@ -1618,7 +1630,7 @@ def bt_zscore_ls(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl=0.80, pfrac
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_mombreak_ls(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_mombreak_ls(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<max(hp, atr_p)+2: return 0.0, 0.0, 0
     rh=np.full(n,np.nan); rl=np.full(n,np.nan)
@@ -1632,12 +1644,12 @@ def bt_mombreak_ls(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl=0
     pos=0; ep=0.0; tr=1.0; pend=0; ts_l=0.0; ts_s=1e18; pk=1.0; mdd=0.0; nt=0
     start=max(hp, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc
         if pend==1 and av[i]==av[i]: ts_l=o[i]-atr_t*av[i]
         elif pend==-1 and av[i]==av[i]: ts_s=o[i]+atr_t*av[i]
         pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         hv=rh[i]; lv=rl[i]; a=av[i]
         if hv!=hv or lv!=lv or a!=a: pass
         else:
@@ -1664,7 +1676,7 @@ def bt_mombreak_ls(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl=0
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_regime_ema_ls(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_regime_ema_ls(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<max(atr_p, max(se_p, te_p))+2: return 0.0, 0.0, 0
     av=_atr(h,l,c,atr_p)
@@ -1676,9 +1688,9 @@ def bt_regime_ema_ls(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, d
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     start=max(atr_p, max(se_p, te_p))
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         a=av[i]
         if a!=a or c[i]<=0: pass
         else:
@@ -1708,14 +1720,14 @@ def bt_regime_ema_ls(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, d
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_dualmom_ls(c, o, fast_lb, slow_lb, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_dualmom_ls(c, o, h, l, fast_lb, slow_lb, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c); lb=max(fast_lb, slow_lb)
     if n<lb+2: return 0.0, 0.0, 0
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(lb, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         pf=c[i-fast_lb]; ps=c[i-slow_lb]
         fast_ret=(c[i]-pf)/pf if pf>0 else 0.0
         slow_ret=(c[i]-ps)/ps if ps>0 else 0.0
@@ -1738,15 +1750,15 @@ def bt_dualmom_ls(c, o, fast_lb, slow_lb, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.
 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def bt_consensus_ls(c, o, ma_s_arr, ma_l_arr, rsi_arr, mom_lb,
-                    rsi_os, rsi_ob, vote_thr, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def bt_consensus_ls(c, o, h, l, ma_s_arr, ma_l_arr, rsi_arr, mom_lb,
+                    rsi_os, rsi_ob, vote_thr, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     n = len(c)
     if n<mom_lb+2: return 0.0, 0.0, 0
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     for i in range(mom_lb, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         v=0; ms=ma_s_arr[i]; ml=ma_l_arr[i]; r=rsi_arr[i]
         if ms!=ms or ml!=ml or r!=r: continue
         if ms>ml: v+=1
@@ -1779,13 +1791,13 @@ def bt_consensus_ls(c, o, ma_s_arr, ma_l_arr, rsi_arr, mom_lb,
 # =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_ma(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_ma(c, o, h, l, ma_s, ma_l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         s0=ma_s[i-1]; l0=ma_l[i-1]; s1=ma_s[i]; l1=ma_l[i]
         if s0!=s0 or l0!=l0 or s1!=s1 or l1!=l1: pass
         elif s0<=l0 and s1>l1:
@@ -1802,13 +1814,13 @@ def _eq_ma(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_rsi(c, o, rsi, os_v, ob_v, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_rsi(c, o, h, l, rsi, os_v, ob_v, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         r=rsi[i]
         if r!=r: pass
         elif r<os_v:
@@ -1827,7 +1839,7 @@ def _eq_rsi(c, o, rsi, os_v, ob_v, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_macd(c, o, ef, es, sig_span, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_macd(c, o, h, l, ef, es, sig_span, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); ml=np.empty(n); sl_=np.empty(n)
     for i in range(n): ml[i]=ef[i]-es[i]
     k=2.0/(sig_span+1.0); sl_[0]=ml[0]
@@ -1835,9 +1847,9 @@ def _eq_macd(c, o, ef, es, sig_span, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(1, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         mp=ml[i-1]; sp=sl_[i-1]; mc=ml[i]; sc=sl_[i]
         if mp!=mp or sp!=sp or mc!=mc or sc!=sc: pass
         elif mp<=sp and mc>sc:
@@ -1854,13 +1866,13 @@ def _eq_macd(c, o, ef, es, sig_span, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_drift(c, o, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_drift(c, o, h, l, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); pos=0; ep=0.0; tr=1.0; pend=0; hc=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(lookback, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; hc=0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         if tc2>0: hc=0
         up=0
         for j in range(1, lookback+1):
@@ -1880,14 +1892,14 @@ def _eq_drift(c, o, lookback, drift_thr, hold_p, sb, ss, cm, lev, dc, sl, pfrac,
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_ramom(c, o, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_ramom(c, o, h, l, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(mom_p, vol_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         prev_r=c[i-mom_p]
         if prev_r<=0: eq_arr[i]=tr; pos_arr[i]=pos; continue
         mom=(c[i]/prev_r)-1.0
@@ -1910,15 +1922,15 @@ def _eq_ramom(c, o, mom_p, vol_p, ez, xz, sb, ss, cm, lev, dc, sl, pfrac, sl_sli
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_turtle(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_turtle(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); aa=_atr(h,l,c,atr_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(entry_p, exit_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         eh=-1e18; el=1e18
         for j in range(1, entry_p+1):
             if h[i-j]>eh: eh=h[i-j]
@@ -1945,14 +1957,14 @@ def _eq_turtle(c, o, h, l, entry_p, exit_p, atr_p, atr_stop, sb, ss, cm, lev, dc
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_bollinger(c, o, period, num_std, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_bollinger(c, o, h, l, period, num_std, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); ma=_rolling_mean(c,period); sd=_rolling_std(c,period)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(period, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m=ma[i]; s=sd[i]
         if m!=m or s!=s or s<1e-10: pass
         else:
@@ -1970,15 +1982,15 @@ def _eq_bollinger(c, o, period, num_std, sb, ss, cm, lev, dc, sl, pfrac, sl_slip
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_keltner(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_keltner(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); ea=_ema(c,ema_p); aa=_atr(h,l,c,atr_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(ema_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         e=ea[i]; a=aa[i]
         if e!=e or a!=a: pass
         else:
@@ -1995,15 +2007,15 @@ def _eq_keltner(c, o, h, l, ema_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl, pfrac,
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_multifactor(c, o, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_multifactor(c, o, h, l, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); rsi=_rsi_wilder(c,rsi_p)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(rsi_p+1, mom_p, vol_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         r=rsi[i]
         if r!=r: pass
         else:
@@ -2027,16 +2039,16 @@ def _eq_multifactor(c, o, rsi_p, mom_p, vol_p, lt, st, sb, ss, cm, lev, dc, sl, 
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
 def _eq_volregime(c, o, h, l, atr_p, vol_thr, ma_s, ma_l, rsi_p, rsi_os, rsi_ob,
-                  sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+                  sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); aa=_atr(h,l,c,atr_p); ra=_rsi_wilder(c,rsi_p)
     ms_a=_rolling_mean(c,ma_s); ml_a=_rolling_mean(c,ma_l)
     pos=0; ep=0.0; tr=1.0; pend=0; mode=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(atr_p,rsi_p+1,ma_l)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         a=aa[i]
         if a!=a or c[i]<=0: pass
         else:
@@ -2069,7 +2081,7 @@ def _eq_volregime(c, o, h, l, atr_p, vol_thr, ma_s, ma_l, rsi_p, rsi_os, rsi_ob,
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_mesa(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_mesa(c, o, h, l, fl, slow_lim, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<40: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     smooth=np.zeros(n); det=np.zeros(n); I1=np.zeros(n); Q1=np.zeros(n)
@@ -2107,9 +2119,9 @@ def _eq_mesa(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(7, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         if pos==0:
             if mama[i]>fama[i] and mama[i-1]<=fama[i-1]: pend=1
             elif mama[i]<fama[i] and mama[i-1]>=fama[i-1]: pend=-1
@@ -2123,7 +2135,7 @@ def _eq_mesa(c, o, fl, slow_lim, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_kama(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_kama(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<er_p+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     fc=2.0/(fast_sc+1.0); sc_v=2.0/(slow_sc+1.0)
@@ -2138,9 +2150,9 @@ def _eq_kama(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev,
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(er_p+2, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         k=kama[i]; kp=kama[i-1]; a=av[i]
         if k!=k or kp!=kp or a!=a: pass
         else:
@@ -2159,7 +2171,7 @@ def _eq_kama(c, o, h, l, er_p, fast_sc, slow_sc, atr_sm, atr_p, sb, ss, cm, lev,
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_donchian(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_donchian(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<entry_p+atr_p: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     av=_atr(h,l,c,atr_p)
@@ -2174,12 +2186,12 @@ def _eq_donchian(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl, pfr
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(entry_p, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc
         if pend==1 and av[i]==av[i]: ts=o[i]-atr_m*av[i]
         elif pend==-1 and av[i]==av[i]: ts=o[i]+atr_m*av[i]
         pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         d1=dh[i-1]; d2=dl[i-1]; a=av[i]
         if d1!=d1 or d2!=d2 or a!=a: pass
         else:
@@ -2202,7 +2214,7 @@ def _eq_donchian(c, o, h, l, entry_p, atr_p, atr_m, sb, ss, cm, lev, dc, sl, pfr
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_zscore(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_zscore(c, o, h, l, lookback, ez, xz, sz, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<lookback+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     rm=np.full(n,np.nan); rs=np.full(n,np.nan); s=0.0; s2=0.0
@@ -2213,9 +2225,9 @@ def _eq_zscore(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl, pfrac, sl_sl
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(lookback, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         m=rm[i]; sd=rs[i]
         if sd==0 or sd!=sd: pass
         else:
@@ -2233,7 +2245,7 @@ def _eq_zscore(c, o, lookback, ez, xz, sz, sb, ss, cm, lev, dc, sl, pfrac, sl_sl
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_mombreak(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_mombreak(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<max(hp,atr_p)+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     rh=np.full(n,np.nan); rl=np.full(n,np.nan)
@@ -2248,12 +2260,12 @@ def _eq_mombreak(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl, pf
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(hp, atr_p)
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc
         if pend==1 and av[i]==av[i]: ts_l=o[i]-atr_t*av[i]
         elif pend==-1 and av[i]==av[i]: ts_s=o[i]+atr_t*av[i]
         pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         hv=rh[i]; lv=rl[i]; a=av[i]
         if hv!=hv or lv!=lv or a!=a: pass
         else:
@@ -2276,7 +2288,7 @@ def _eq_mombreak(c, o, h, l, hp, prox, atr_p, atr_t, sb, ss, cm, lev, dc, sl, pf
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_regime_ema(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_regime_ema(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<max(atr_p,max(se_p,te_p))+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     av=_atr(h,l,c,atr_p)
@@ -2289,9 +2301,9 @@ def _eq_regime_ema(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc,
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     start=max(atr_p, max(se_p, te_p))
     for i in range(start, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         a=av[i]
         if a!=a or c[i]<=0: pass
         else:
@@ -2317,15 +2329,15 @@ def _eq_regime_ema(c, o, h, l, atr_p, vt, fe_p, se_p, te_p, sb, ss, cm, lev, dc,
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_dualmom(c, o, fast_lb, slow_lb, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_dualmom(c, o, h, l, fast_lb, slow_lb, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c); lb=max(fast_lb, slow_lb)
     if n<lb+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(lb, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         pf=c[i-fast_lb]; ps=c[i-slow_lb]
         fast_ret=(c[i]-pf)/pf if pf>0 else 0.0
         slow_ret=(c[i]-ps)/ps if ps>0 else 0.0
@@ -2344,16 +2356,16 @@ def _eq_dualmom(c, o, fast_lb, slow_lb, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
     return (tr-1.0)*100.0, mdd, nt, eq_arr, fpos, pos_arr
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH)
-def _eq_consensus(c, o, ma_s_arr, ma_l_arr, rsi_arr, mom_lb,
-                  rsi_os, rsi_ob, vote_thr, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _eq_consensus(c, o, h, l, ma_s_arr, ma_l_arr, rsi_arr, mom_lb,
+                  rsi_os, rsi_ob, vote_thr, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     n=len(c)
     if n<mom_lb+2: return 0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64)
     pos=0; ep=0.0; tr=1.0; pend=0; pk=1.0; mdd=0.0; nt=0
     eq_arr=np.ones(n, dtype=np.float64); pos_arr=np.zeros(n, dtype=np.int64)
     for i in range(mom_lb, n):
-        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,pfrac); nt+=tc; pend=0
+        pos,ep,tr,tc,liq=_fx_lev(pend,pos,ep,o[i],tr,sb,ss,cm,lev,dc,dc_short,pfrac); nt+=tc; pend=0
         if liq: pos=0; ep=0.0; eq_arr[i]=tr; pos_arr[i]=0; continue
-        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,c[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
+        pos,ep,tr,tc2=_sl_exit(pos,ep,tr,h[i],l[i],sb,ss,cm,lev,sl,pfrac,sl_slip); nt+=tc2
         v=0; ms=ma_s_arr[i]; ml=ma_l_arr[i]; r=rsi_arr[i]
         if ms!=ms or ml!=ml or r!=r: pos_arr[i]=pos; eq_arr[i]=_mtm_lev(pos,tr,c[i],ep,sb,ss,cm,lev,sl,pfrac); continue
         if ms>ml: v+=1
@@ -2435,7 +2447,7 @@ POSITION_FRAC: Dict[int, float] = {
 #
 #  To add a new strategy:
 #    1. Write your @njit kernel: bt_newstrat_ls(c, o, ..., sb, ss, cm,
-#       lev, dc, sl, pfrac, sl_slip) -> (ret%, maxDD%, nTrades)
+#       lev, dc, dc_short, sl, pfrac, sl_slip) -> (ret%, maxDD%, nTrades)
 #    2. Add it to KERNEL_REGISTRY
 #    3. Add its default param grid to DEFAULT_PARAM_GRIDS
 #    4. Add a _scan_<name> function below
@@ -2504,7 +2516,14 @@ class KernelResult:
 
 
 def config_to_kernel_costs(config: BacktestConfig) -> Dict[str, float]:
-    """Translate BacktestConfig into the flat cost params kernels expect."""
+    """Translate BacktestConfig into the flat cost params kernels expect.
+
+    Limitation: Numba kernels use proportional-only commission (``cm``).
+    Fixed per-order commissions (``commission_fixed_buy/sell``) and
+    per-share commissions (``commission_per_share``) are NOT applied in
+    the kernel path.  Use the Python ``BacktestEngine``/``FillSimulator``
+    path for IBKR-style per-share cost models.
+    """
     lev = config.leverage
     base_slip_buy = config.slippage_bps_buy / 10000.0
     base_slip_sell = config.slippage_bps_sell / 10000.0
@@ -2518,20 +2537,17 @@ def config_to_kernel_costs(config: BacktestConfig) -> Dict[str, float]:
     if config.funding_leverage_scaling and lev > 1.0:
         dc *= lev * (1.0 + 0.02 * lev)
     bpy = getattr(config, "bars_per_year", 252.0)
-    # NOTE: borrow cost excluded from dc — it should only apply to short
-    # positions, but dc is charged uniformly to all positions in _fx_lev.
-    # Keeping borrow out prevents long positions from being penalised.
-    # TODO: implement direction-specific per-bar costs (dc_long / dc_short).
+    dc_short = config.short_borrow_rate_annual / bpy if bpy > 0 else 0.0
 
     sl = config.stop_loss_pct if config.stop_loss_pct else 0.80
     pfrac = config.position_fraction
-    if pfrac == 1.0 and lev > 1:
+    if config.auto_scale_position_fraction and pfrac == 1.0 and lev > 1:
         pfrac = POSITION_FRAC.get(int(lev), max(0.10, 1.0 / math.sqrt(lev)))
-    sl_slip = max(base_slip_buy, base_slip_sell) * lev * 0.5
+    sl_slip = config.stop_loss_slippage_pct
 
     return {
         "sb": sb, "ss": ss, "cm": cm, "lev": lev,
-        "dc": dc, "sl": sl, "pfrac": pfrac, "sl_slip": sl_slip,
+        "dc": dc, "dc_short": dc_short, "sl": sl, "pfrac": pfrac, "sl_slip": sl_slip,
         "bars_per_year": bpy,
     }
 
@@ -2550,7 +2566,7 @@ def run_kernel(
     r, d, nt = eval_kernel(
         name, params, c, o, h, l,
         costs["sb"], costs["ss"], costs["cm"], costs["lev"],
-        costs["dc"], costs["sl"], costs["pfrac"], costs["sl_slip"],
+        costs["dc"], costs["dc_short"], costs["sl"], costs["pfrac"], costs["sl_slip"],
     )
     sc = _score(r, d, nt)
     return KernelResult(ret_pct=r, max_dd_pct=d, n_trades=nt, params=params, score=sc)
@@ -2586,7 +2602,7 @@ def run_kernel_detailed(
     r, d, nt, eq, fpos, _ = eval_kernel_detailed(
         name, params, c, o, h, l,
         costs["sb"], costs["ss"], costs["cm"], costs["lev"],
-        costs["dc"], costs["sl"], costs["pfrac"], costs["sl_slip"],
+        costs["dc"], costs["dc_short"], costs["sl"], costs["pfrac"], costs["sl_slip"],
     )
     sc = _score(r, d, nt)
     bar_ret = np.diff(eq) / np.maximum(eq[:-1], 1e-10)
@@ -2614,7 +2630,7 @@ def run_kernel_detailed(
     )
 
 
-def eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Dispatch to equity-tracking kernel variant.
 
     Returns (ret, dd, nt, equity, final_pos, pos_arr).
@@ -2624,96 +2640,96 @@ def eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80,
         return (0.0, 0.0, 0, np.ones(n, dtype=np.float64), 0, np.zeros(n, dtype=np.int64))
     p = params
     if name == "MA":
-        return _eq_ma(c, o, _rolling_mean(c, int(p[0])), _rolling_mean(c, int(p[1])),
-                      sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_ma(c, o, h, l, _rolling_mean(c, int(p[0])), _rolling_mean(c, int(p[1])),
+                      sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RSI":
-        return _eq_rsi(c, o, _rsi_wilder(c, int(p[0])), float(p[1]), float(p[2]),
-                       sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_rsi(c, o, h, l, _rsi_wilder(c, int(p[0])), float(p[1]), float(p[2]),
+                       sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MACD":
-        return _eq_macd(c, o, _ema(c, int(p[0])), _ema(c, int(p[1])), int(p[2]),
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_macd(c, o, h, l, _ema(c, int(p[0])), _ema(c, int(p[1])), int(p[2]),
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Drift":
-        return _eq_drift(c, o, int(p[0]), float(p[1]), int(p[2]),
-                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_drift(c, o, h, l, int(p[0]), float(p[1]), int(p[2]),
+                         sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RAMOM":
-        return _eq_ramom(c, o, int(p[0]), int(p[1]), float(p[2]), float(p[3]),
-                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_ramom(c, o, h, l, int(p[0]), int(p[1]), float(p[2]), float(p[3]),
+                         sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Turtle":
         return _eq_turtle(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Bollinger":
-        return _eq_bollinger(c, o, int(p[0]), float(p[1]),
-                             sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_bollinger(c, o, h, l, int(p[0]), float(p[1]),
+                             sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Keltner":
         return _eq_keltner(c, o, h, l, int(p[0]), int(p[1]), float(p[2]),
-                           sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                           sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MultiFactor":
-        return _eq_multifactor(c, o, int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]),
-                               sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_multifactor(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]),
+                               sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "VolRegime":
         ms_, ml_ = int(max(2, p[2])), int(max(5, p[3]))
         if ms_ >= ml_:
             return (0.0, 0.0, 0, np.ones(len(c), dtype=np.float64), 0, np.zeros(len(c), dtype=np.int64))
         return _eq_volregime(c, o, h, l, int(p[0]), float(p[1]), ms_, ml_, 14,
-                             int(p[4]), int(p[5]), sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                             int(p[4]), int(p[5]), sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MESA":
-        return _eq_mesa(c, o, float(p[0]), float(p[1]),
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_mesa(c, o, h, l, float(p[0]), float(p[1]),
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "KAMA":
         return _eq_kama(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]), int(p[4]),
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Donchian":
         return _eq_donchian(c, o, h, l, int(p[0]), int(p[1]), float(p[2]),
-                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                            sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "ZScore":
-        return _eq_zscore(c, o, int(p[0]), float(p[1]), float(p[2]), float(p[3]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_zscore(c, o, h, l, int(p[0]), float(p[1]), float(p[2]), float(p[3]),
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MomBreak":
         return _eq_mombreak(c, o, h, l, int(p[0]), float(p[1]), int(p[2]), float(p[3]),
-                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                            sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RegimeEMA":
         fe, se = int(max(2, p[2])), int(max(5, p[3]))
         if fe >= se:
             return (0.0, 0.0, 0, np.ones(len(c), dtype=np.float64), 0, np.zeros(len(c), dtype=np.int64))
         return _eq_regime_ema(c, o, h, l, int(max(5, p[0])), float(p[1]), fe, se, int(p[4]),
-                              sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                              sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "DualMom":
         fl_, sl_ = int(max(2, p[0])), int(max(5, p[1]))
         if fl_ >= sl_:
             return (0.0, 0.0, 0, np.ones(len(c), dtype=np.float64), 0, np.zeros(len(c), dtype=np.int64))
-        return _eq_dualmom(c, o, fl_, sl_,
-                           sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return _eq_dualmom(c, o, h, l, fl_, sl_,
+                           sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Consensus":
         ms_, ml_ = int(min(200, max(2, p[0]))), int(min(200, max(5, p[1])))
         if ms_ >= ml_:
             return (0.0, 0.0, 0, np.ones(len(c), dtype=np.float64), 0, np.zeros(len(c), dtype=np.int64))
         rp_ = int(min(200, max(2, p[2])))
-        return _eq_consensus(c, o, _rolling_mean(c, ms_), _rolling_mean(c, ml_),
+        return _eq_consensus(c, o, h, l, _rolling_mean(c, ms_), _rolling_mean(c, ml_),
                              _rsi_wilder(c, rp_), int(p[3]), float(p[4]), float(p[5]),
-                             int(p[6]), sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                             int(p[6]), sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     return (0.0, 0.0, 0, np.ones(len(c), dtype=np.float64), 0, np.zeros(len(c), dtype=np.int64))
 
 
-def eval_kernel_position(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def eval_kernel_position(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Run equity kernel and return only the final position: +1 (long), -1 (short), 0 (flat)."""
-    _, _, _, _, fpos, _ = eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+    _, _, _, _, fpos, _ = eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     return fpos
 
 
-def eval_kernel_position_array(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
+def eval_kernel_position_array(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Run equity kernel and return per-bar position array in O(n).
 
     Returns np.ndarray of int64 with values +1 (long), -1 (short), 0 (flat)
     at each bar.  This is a single-pass O(n) operation — vastly faster than
     the O(n²) eval_kernel_position_series for large bar counts.
     """
-    _, _, _, _, _, pos_arr = eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+    _, _, _, _, _, pos_arr = eval_kernel_detailed(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     return pos_arr
 
 
 def eval_kernel_position_series(
     name, params, c, o, h, l,
-    sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0,
+    sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0,
     min_bars: int = 30,
 ) -> np.ndarray:
     """Return the kernel position at each bar as an int array (+1, -1, 0).
@@ -2723,7 +2739,7 @@ def eval_kernel_position_series(
     """
     return eval_kernel_position_array(
         name, params, c, o, h, l,
-        sb, ss, cm, lev, dc, sl, pfrac, sl_slip,
+        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip,
     )
 
 
@@ -2731,85 +2747,94 @@ def eval_kernel_position_series(
 #  Single-kernel dispatch (used by BacktestEngine and robust_scan)
 # =====================================================================
 
-def eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl=0.80, pfrac=1.0, sl_slip=0.0):
-    """Dispatch to the correct kernel with on-the-fly indicator computation."""
+def eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short=0.0, sl=0.80, pfrac=1.0, sl_slip=0.0):
+    """Dispatch to the correct kernel with on-the-fly indicator computation.
+
+    When quant_core (Rust) is available, uses the Rust path for ~3-5x speedup.
+    Falls back to Numba transparently.
+    """
     if params is None:
         return (0.0, 0.0, 0)
+    if _USE_RUST:
+        return _rust_eval_kernel(
+            name, list(float(v) for v in params), c, o, h, l,
+            sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip,
+        )
     p = params
     if name == "MA":
-        return bt_ma_ls(c, o, _rolling_mean(c, int(p[0])), _rolling_mean(c, int(p[1])),
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_ma_ls(c, o, h, l, _rolling_mean(c, int(p[0])), _rolling_mean(c, int(p[1])),
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RSI":
-        return bt_rsi_ls(c, o, _rsi_wilder(c, int(p[0])), float(p[1]), float(p[2]),
-                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_rsi_ls(c, o, h, l, _rsi_wilder(c, int(p[0])), float(p[1]), float(p[2]),
+                         sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MACD":
-        return bt_macd_ls(c, o, _ema(c, int(p[0])), _ema(c, int(p[1])), int(p[2]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_macd_ls(c, o, h, l, _ema(c, int(p[0])), _ema(c, int(p[1])), int(p[2]),
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Drift":
-        return bt_drift_ls(c, o, int(p[0]), float(p[1]), int(p[2]),
-                           sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_drift_ls(c, o, h, l, int(p[0]), float(p[1]), int(p[2]),
+                           sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RAMOM":
-        return bt_ramom_ls(c, o, int(p[0]), int(p[1]), float(p[2]), float(p[3]),
-                           sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_ramom_ls(c, o, h, l, int(p[0]), int(p[1]), float(p[2]), float(p[3]),
+                           sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Turtle":
         return bt_turtle_ls(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]),
-                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                            sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Bollinger":
-        return bt_bollinger_ls(c, o, int(p[0]), float(p[1]),
-                               sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_bollinger_ls(c, o, h, l, int(p[0]), float(p[1]),
+                               sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Keltner":
         return bt_keltner_ls(c, o, h, l, int(p[0]), int(p[1]), float(p[2]),
-                             sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                             sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MultiFactor":
-        return bt_multifactor_ls(c, o, int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]),
-                                 sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_multifactor_ls(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]),
+                                 sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "VolRegime":
         ms_, ml_ = int(max(2, p[2])), int(max(5, p[3]))
         if ms_ >= ml_:
             return (0.0, 0.0, 0)
         return bt_volregime_ls(c, o, h, l, int(p[0]), float(p[1]), ms_, ml_, 14,
-                               int(p[4]), int(p[5]), sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                               int(p[4]), int(p[5]), sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MESA":
-        return bt_mesa_ls(c, o, float(p[0]), float(p[1]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_mesa_ls(c, o, h, l, float(p[0]), float(p[1]),
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "KAMA":
         return bt_kama_ls(c, o, h, l, int(p[0]), int(p[1]), int(p[2]), float(p[3]), int(p[4]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Donchian":
         return bt_donchian_ls(c, o, h, l, int(p[0]), int(p[1]), float(p[2]),
-                              sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                              sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "ZScore":
-        return bt_zscore_ls(c, o, int(p[0]), float(p[1]), float(p[2]), float(p[3]),
-                            sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_zscore_ls(c, o, h, l, int(p[0]), float(p[1]), float(p[2]), float(p[3]),
+                            sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "MomBreak":
         return bt_mombreak_ls(c, o, h, l, int(p[0]), float(p[1]), int(p[2]), float(p[3]),
-                              sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                              sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "RegimeEMA":
         fe, se = int(max(2, p[2])), int(max(5, p[3]))
         if fe >= se:
             return (0.0, 0.0, 0)
         return bt_regime_ema_ls(c, o, h, l, int(max(5, p[0])), float(p[1]), fe, se, int(p[4]),
-                                sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                                sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "DualMom":
         fl_, sl_ = int(max(2, p[0])), int(max(5, p[1]))
         if fl_ >= sl_:
             return (0.0, 0.0, 0)
-        return bt_dualmom_ls(c, o, fl_, sl_,
-                             sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_dualmom_ls(c, o, h, l, fl_, sl_,
+                             sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     if name == "Consensus":
         ms_, ml_ = int(min(200, max(2, p[0]))), int(min(200, max(5, p[1])))
         if ms_ >= ml_:
             return (0.0, 0.0, 0)
         rp_ = int(min(200, max(2, p[2])))
-        return bt_consensus_ls(c, o, _rolling_mean(c, ms_), _rolling_mean(c, ml_),
+        return bt_consensus_ls(c, o, h, l, _rolling_mean(c, ms_), _rolling_mean(c, ml_),
                                _rsi_wilder(c, rp_), int(p[3]), float(p[4]), float(p[5]),
-                               int(p[6]), sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                               int(p[6]), sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     raise ValueError(f"Unknown strategy: {name}")
 
 
 def eval_kernel_precomp(name, params, c, o, h, l,
                         mas=None, emas=None, rsis=None,
-                        sb=0.0, ss=0.0, cm=0.0, lev=1.0, dc=0.0,
+                        sb=0.0, ss=0.0, cm=0.0, lev=1.0, dc=0.0, dc_short=0.0,
                         sl=0.80, pfrac=1.0, sl_slip=0.0):
     """Like eval_kernel but reuses precomputed indicator arrays when available.
 
@@ -2828,20 +2853,20 @@ def eval_kernel_precomp(name, params, c, o, h, l,
         si, li = int(p[0]), int(p[1])
         ma_s = mas[si] if mas is not None and si < mas.shape[0] else _rolling_mean(c, si)
         ma_l = mas[li] if mas is not None and li < mas.shape[0] else _rolling_mean(c, li)
-        return bt_ma_ls(c, o, ma_s, ma_l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_ma_ls(c, o, h, l, ma_s, ma_l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
 
     if name == "RSI":
         rp = int(p[0])
         rsi_arr = rsis[rp] if rsis is not None and rp < rsis.shape[0] else _rsi_wilder(c, rp)
-        return bt_rsi_ls(c, o, rsi_arr, float(p[1]), float(p[2]),
-                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_rsi_ls(c, o, h, l, rsi_arr, float(p[1]), float(p[2]),
+                         sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
 
     if name == "MACD":
         fi, si_ = int(p[0]), int(p[1])
         ema_f = emas[fi] if emas is not None and fi < emas.shape[0] else _ema(c, fi)
         ema_s = emas[si_] if emas is not None and si_ < emas.shape[0] else _ema(c, si_)
-        return bt_macd_ls(c, o, ema_f, ema_s, int(p[2]),
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+        return bt_macd_ls(c, o, h, l, ema_f, ema_s, int(p[2]),
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
 
     if name == "Consensus":
         ms_ = int(min(200, max(2, p[0])))
@@ -2852,11 +2877,11 @@ def eval_kernel_precomp(name, params, c, o, h, l,
         ma_s = mas[ms_] if mas is not None and ms_ < mas.shape[0] else _rolling_mean(c, ms_)
         ma_l = mas[ml_] if mas is not None and ml_ < mas.shape[0] else _rolling_mean(c, ml_)
         rsi_arr = rsis[rp_] if rsis is not None and rp_ < rsis.shape[0] else _rsi_wilder(c, rp_)
-        return bt_consensus_ls(c, o, ma_s, ma_l, rsi_arr,
+        return bt_consensus_ls(c, o, h, l, ma_s, ma_l, rsi_arr,
                                int(p[3]), float(p[4]), float(p[5]), int(p[6]),
-                               sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+                               sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
 
-    return eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, sl, pfrac, sl_slip)
+    return eval_kernel(name, params, c, o, h, l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
 
 
 # =====================================================================
@@ -2864,12 +2889,12 @@ def eval_kernel_precomp(name, params, c, o, h, l,
 # =====================================================================
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_ma_njit(grid, c, o, mas, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_ma_njit(grid, c, o, h, l, mas, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         si = int(grid[k,0]); li = int(grid[k,1])
-        r,d,nt = bt_ma_ls(c,o,mas[si],mas[li],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_ma_ls(c,o,h,l,mas[si],mas[li],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2877,11 +2902,11 @@ def _scan_ma_njit(grid, c, o, mas, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_rsi_njit(grid, c, o, rsis, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_rsi_njit(grid, c, o, h, l, rsis, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_rsi_ls(c,o,rsis[int(grid[k,0])],grid[k,1],grid[k,2],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_rsi_ls(c,o,h,l,rsis[int(grid[k,0])],grid[k,1],grid[k,2],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2900,11 +2925,11 @@ def _precompute_macd_lines(emas, pairs, n):
     return out
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_macd_njit(grid, c, o, macd_lines, pair_idx, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_macd_njit(grid, c, o, h, l, macd_lines, pair_idx, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_macd_precomp(c,o,macd_lines[pair_idx[k]],int(grid[k,2]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_macd_precomp(c,o,h,l,macd_lines[pair_idx[k]],int(grid[k,2]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2912,11 +2937,11 @@ def _scan_macd_njit(grid, c, o, macd_lines, pair_idx, sb, ss, cm, lev, dc, sl, p
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_drift_njit(grid, c, o, up_prefix, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_drift_njit(grid, c, o, h, l, up_prefix, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_drift_precomp(c,o,up_prefix,int(grid[k,0]),grid[k,1],int(grid[k,2]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_drift_precomp(c,o,h,l,up_prefix,int(grid[k,0]),grid[k,1],int(grid[k,2]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2924,11 +2949,11 @@ def _scan_drift_njit(grid, c, o, up_prefix, sb, ss, cm, lev, dc, sl, pfrac, sl_s
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_ramom_njit(grid, c, o, vols, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_ramom_njit(grid, c, o, h, l, vols, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_ramom_precomp(c,o,int(grid[k,0]),vols[int(grid[k,1])],grid[k,2],grid[k,3],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_ramom_precomp(c,o,h,l,int(grid[k,0]),vols[int(grid[k,1])],grid[k,2],grid[k,3],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2936,8 +2961,8 @@ def _scan_ramom_njit(grid, c, o, vols, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_turtle_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
-                      sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_turtle_njit(grid, c, o, h, l, rmax_h, rmin_l, atr_10, atr_14, atr_20,
+                      sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
@@ -2945,7 +2970,7 @@ def _scan_turtle_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
         if ap_ == 10: aa = atr_10
         elif ap_ == 14: aa = atr_14
         else: aa = atr_20
-        r,d,nt = bt_turtle_precomp(c,o,aa,rmax_h[ep_],rmin_l[ep_],rmin_l[xp_],rmax_h[xp_],
+        r,d,nt = bt_turtle_precomp(c,o,h,l,aa,rmax_h[ep_],rmin_l[ep_],rmin_l[xp_],rmax_h[xp_],
                                     ep_,xp_,grid[k,3],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -2954,12 +2979,12 @@ def _scan_turtle_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_bollinger_njit(grid, c, o, mas, stds, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_bollinger_njit(grid, c, o, h, l, mas, stds, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         p_ = int(grid[k,0])
-        r,d,nt = bt_bollinger_precomp(c,o,mas[p_],stds[p_],grid[k,1],p_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_bollinger_precomp(c,o,h,l,mas[p_],stds[p_],grid[k,1],p_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2967,8 +2992,8 @@ def _scan_bollinger_njit(grid, c, o, mas, stds, sb, ss, cm, lev, dc, sl, pfrac, 
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_keltner_njit(grid, c, o, emas, atr_10, atr_14, atr_20,
-                       sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_keltner_njit(grid, c, o, h, l, emas, atr_10, atr_14, atr_20,
+                       sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
@@ -2976,7 +3001,7 @@ def _scan_keltner_njit(grid, c, o, emas, atr_10, atr_14, atr_20,
         if ap_ == 10: aa = atr_10
         elif ap_ == 14: aa = atr_14
         else: aa = atr_20
-        r,d,nt = bt_keltner_precomp(c,o,emas[ep_],aa,grid[k,2],ep_,ap_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_keltner_precomp(c,o,h,l,emas[ep_],aa,grid[k,2],ep_,ap_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -2984,12 +3009,12 @@ def _scan_keltner_njit(grid, c, o, emas, atr_10, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_multifactor_njit(grid, c, o, rsis, vols, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_multifactor_njit(grid, c, o, h, l, rsis, vols, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         rp_ = int(grid[k,0]); mp_ = int(grid[k,1]); vp_ = int(grid[k,2])
-        r,d,nt = bt_multifactor_precomp(c,o,rsis[rp_],mp_,vols[vp_],grid[k,3],grid[k,4],
+        r,d,nt = bt_multifactor_precomp(c,o,h,l,rsis[rp_],mp_,vols[vp_],grid[k,3],grid[k,4],
                                          sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -2998,15 +3023,15 @@ def _scan_multifactor_njit(grid, c, o, rsis, vols, sb, ss, cm, lev, dc, sl, pfra
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_volregime_njit(grid, c, o, mas, rsis, atr_14, atr_20,
-                         sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_volregime_njit(grid, c, o, h, l, mas, rsis, atr_14, atr_20,
+                         sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         ap_ = int(grid[k,0]); ms_ = int(grid[k,2]); ml_ = int(grid[k,3])
         aa = atr_14 if ap_ == 14 else atr_20
         start = max(ap_, 15, ml_)
-        r,d,nt = bt_volregime_precomp(c,o,aa,rsis[14],mas[ms_],mas[ml_],
+        r,d,nt = bt_volregime_precomp(c,o,h,l,aa,rsis[14],mas[ms_],mas[ml_],
                                        grid[k,1],int(grid[k,4]),int(grid[k,5]),start,
                                        sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
@@ -3016,11 +3041,11 @@ def _scan_volregime_njit(grid, c, o, mas, rsis, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_mesa_njit(grid, c, o, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_mesa_njit(grid, c, o, h, l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_mesa_precomp(c,o,grid[k,0],grid[k,1],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_mesa_precomp(c,o,h,l,grid[k,0],grid[k,1],sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -3053,15 +3078,15 @@ def _precompute_all_kama(close, unique_params):
     return out
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_kama_njit(grid, c, o, kama_arrs, kama_idx, atr_14, atr_20,
-                    sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_kama_njit(grid, c, o, h, l, kama_arrs, kama_idx, atr_14, atr_20,
+                    sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         erp = int(grid[k,0]); asm = grid[k,3]; ap_ = int(grid[k,4])
         kama_arr = kama_arrs[kama_idx[k]]
         aa = atr_14 if ap_ == 14 else atr_20
-        r,d,nt = bt_kama_precomp(c,o,kama_arr,aa,asm,erp,ap_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_kama_precomp(c,o,h,l,kama_arr,aa,asm,erp,ap_,sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -3069,8 +3094,8 @@ def _scan_kama_njit(grid, c, o, kama_arrs, kama_idx, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_donchian_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_donchian_njit(grid, c, o, h, l, rmax_h, rmin_l, atr_10, atr_14, atr_20,
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
@@ -3078,7 +3103,7 @@ def _scan_donchian_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
         if ap_ == 10: aa = atr_10
         elif ap_ == 14: aa = atr_14
         else: aa = atr_20
-        r,d,nt = bt_donchian_precomp(c,o,rmax_h[ep_],rmin_l[ep_],aa,grid[k,2],ep_,ap_,
+        r,d,nt = bt_donchian_precomp(c,o,h,l,rmax_h[ep_],rmin_l[ep_],aa,grid[k,2],ep_,ap_,
                                       sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -3087,12 +3112,12 @@ def _scan_donchian_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_zscore_njit(grid, c, o, mas, stds, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_zscore_njit(grid, c, o, h, l, mas, stds, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         lb = int(grid[k,0])
-        r,d,nt = bt_zscore_precomp(c,o,mas[lb],stds[lb],lb,grid[k,1],grid[k,2],grid[k,3],
+        r,d,nt = bt_zscore_precomp(c,o,h,l,mas[lb],stds[lb],lb,grid[k,1],grid[k,2],grid[k,3],
                                     sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -3101,8 +3126,8 @@ def _scan_zscore_njit(grid, c, o, mas, stds, sb, ss, cm, lev, dc, sl, pfrac, sl_
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_mombreak_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
-                        sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_mombreak_njit(grid, c, o, h, l, rmax_h, rmin_l, atr_10, atr_14, atr_20,
+                        sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
@@ -3110,7 +3135,7 @@ def _scan_mombreak_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
         if ap_ == 10: aa = atr_10
         elif ap_ == 14: aa = atr_14
         else: aa = atr_20
-        r,d,nt = bt_mombreak_precomp(c,o,aa,rmax_h[hp_],rmin_l[hp_],hp_,grid[k,1],grid[k,3],
+        r,d,nt = bt_mombreak_precomp(c,o,h,l,aa,rmax_h[hp_],rmin_l[hp_],hp_,grid[k,1],grid[k,3],
                                       sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -3119,14 +3144,14 @@ def _scan_mombreak_njit(grid, c, o, rmax_h, rmin_l, atr_10, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_regime_ema_njit(grid, c, o, emas, atr_14, atr_20,
-                          sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_regime_ema_njit(grid, c, o, h, l, emas, atr_14, atr_20,
+                          sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         ap_ = int(grid[k,0]); fe_ = int(grid[k,2]); se_ = int(grid[k,3]); te_ = int(grid[k,4])
         aa = atr_14 if ap_ == 14 else atr_20
-        r,d,nt = bt_regime_ema_precomp(c,o,aa,emas[fe_],emas[se_],emas[te_],grid[k,1],ap_,se_,te_,
+        r,d,nt = bt_regime_ema_precomp(c,o,h,l,aa,emas[fe_],emas[se_],emas[te_],grid[k,1],ap_,se_,te_,
                                         sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -3135,11 +3160,11 @@ def _scan_regime_ema_njit(grid, c, o, emas, atr_14, atr_20,
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_dualmom_njit(grid, c, o, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_dualmom_njit(grid, c, o, h, l, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
-        r,d,nt = bt_dualmom_ls(c,o,int(grid[k,0]),int(grid[k,1]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
+        r,d,nt = bt_dualmom_ls(c,o,h,l,int(grid[k,0]),int(grid[k,1]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
     for k in range(1, ng):
@@ -3147,12 +3172,12 @@ def _scan_dualmom_njit(grid, c, o, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
     return bi, _sc[bi], _r[bi], _d[bi], _n[bi], ng
 
 @njit(cache=True, fastmath=_SAFE_FASTMATH, parallel=True)
-def _scan_consensus_njit(grid, c, o, mas, rsis, sb, ss, cm, lev, dc, sl, pfrac, sl_slip):
+def _scan_consensus_njit(grid, c, o, h, l, mas, rsis, sb, ss, cm, lev, dc, dc_short, sl, pfrac, sl_slip):
     ng = grid.shape[0]
     _sc = np.empty(ng); _r = np.empty(ng); _d = np.empty(ng); _n = np.empty(ng, dtype=np.int64)
     for k in prange(ng):
         ms_ = int(grid[k,0]); ml_ = int(grid[k,1])
-        r,d,nt = bt_consensus_ls(c,o,mas[ms_],mas[ml_],rsis[int(grid[k,2])],int(grid[k,3]),
+        r,d,nt = bt_consensus_ls(c,o,h,l,mas[ms_],mas[ml_],rsis[int(grid[k,2])],int(grid[k,3]),
                                   grid[k,4],grid[k,5],int(grid[k,6]),sb,ss,cm,lev,dc,sl,pfrac,sl_slip)
         _sc[k] = _score(r,d,nt); _r[k] = r; _d[k] = d; _n[k] = nt
     bi = 0
@@ -3302,6 +3327,7 @@ def scan_all_kernels(
     costs = config_to_kernel_costs(config)
     sb, ss_, cm = costs["sb"], costs["ss"], costs["cm"]
     lev, dc = costs["lev"], costs["dc"]
+    dc_short = costs.get("dc_short", 0.0)
     sl, pfrac, sl_slip = costs["sl"], costs["pfrac"], costs["sl_slip"]
 
     grids = param_grids if param_grids is not None else DEFAULT_PARAM_GRIDS
@@ -3413,26 +3439,26 @@ def scan_all_kernels(
         tasks.append((sn, raw_grid, ga))
 
     # ── Per-strategy dispatch via closure-bound lambdas (O(1) lookup) ──
-    _cost = (sb, ss_, cm, lev, dc, sl, pfrac, sl_slip)
+    _cost = (sb, ss_, cm, lev, dc, dc_short, sl, pfrac, sl_slip)
     _scan_dispatch = {
-        "MA":          lambda ga: _scan_ma_njit(ga, c, o, mas, *_cost),
-        "RSI":         lambda ga: _scan_rsi_njit(ga, c, o, rsis, *_cost),
-        "MACD":        lambda ga: _scan_macd_njit(ga, c, o, macd_lines, macd_pair_idx, *_cost),
-        "Drift":       lambda ga: _scan_drift_njit(ga, c, o, up_prefix, *_cost),
-        "RAMOM":       lambda ga: _scan_ramom_njit(ga, c, o, vols, *_cost),
-        "Turtle":      lambda ga: _scan_turtle_njit(ga, c, o, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
-        "Bollinger":   lambda ga: _scan_bollinger_njit(ga, c, o, mas, stds, *_cost),
-        "Keltner":     lambda ga: _scan_keltner_njit(ga, c, o, emas, atr10, atr14, atr20, *_cost),
-        "MultiFactor": lambda ga: _scan_multifactor_njit(ga, c, o, rsis, vols, *_cost),
-        "VolRegime":   lambda ga: _scan_volregime_njit(ga, c, o, mas, rsis, atr14, atr20, *_cost),
-        "MESA":        lambda ga: _scan_mesa_njit(ga, c, o, *_cost),
-        "KAMA":        lambda ga: _scan_kama_njit(ga, c, o, kama_arrs, kama_idx, atr14, atr20, *_cost),
-        "Donchian":    lambda ga: _scan_donchian_njit(ga, c, o, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
-        "ZScore":      lambda ga: _scan_zscore_njit(ga, c, o, mas, stds, *_cost),
-        "MomBreak":    lambda ga: _scan_mombreak_njit(ga, c, o, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
-        "RegimeEMA":   lambda ga: _scan_regime_ema_njit(ga, c, o, emas, atr14, atr20, *_cost),
-        "DualMom":     lambda ga: _scan_dualmom_njit(ga, c, o, *_cost),
-        "Consensus":   lambda ga: _scan_consensus_njit(ga, c, o, mas, rsis, *_cost),
+        "MA":          lambda ga: _scan_ma_njit(ga, c, o, h, l, mas, *_cost),
+        "RSI":         lambda ga: _scan_rsi_njit(ga, c, o, h, l, rsis, *_cost),
+        "MACD":        lambda ga: _scan_macd_njit(ga, c, o, h, l, macd_lines, macd_pair_idx, *_cost),
+        "Drift":       lambda ga: _scan_drift_njit(ga, c, o, h, l, up_prefix, *_cost),
+        "RAMOM":       lambda ga: _scan_ramom_njit(ga, c, o, h, l, vols, *_cost),
+        "Turtle":      lambda ga: _scan_turtle_njit(ga, c, o, h, l, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
+        "Bollinger":   lambda ga: _scan_bollinger_njit(ga, c, o, h, l, mas, stds, *_cost),
+        "Keltner":     lambda ga: _scan_keltner_njit(ga, c, o, h, l, emas, atr10, atr14, atr20, *_cost),
+        "MultiFactor": lambda ga: _scan_multifactor_njit(ga, c, o, h, l, rsis, vols, *_cost),
+        "VolRegime":   lambda ga: _scan_volregime_njit(ga, c, o, h, l, mas, rsis, atr14, atr20, *_cost),
+        "MESA":        lambda ga: _scan_mesa_njit(ga, c, o, h, l, *_cost),
+        "KAMA":        lambda ga: _scan_kama_njit(ga, c, o, h, l, kama_arrs, kama_idx, atr14, atr20, *_cost),
+        "Donchian":    lambda ga: _scan_donchian_njit(ga, c, o, h, l, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
+        "ZScore":      lambda ga: _scan_zscore_njit(ga, c, o, h, l, mas, stds, *_cost),
+        "MomBreak":    lambda ga: _scan_mombreak_njit(ga, c, o, h, l, rmax_h, rmin_l, atr10, atr14, atr20, *_cost),
+        "RegimeEMA":   lambda ga: _scan_regime_ema_njit(ga, c, o, h, l, emas, atr14, atr20, *_cost),
+        "DualMom":     lambda ga: _scan_dualmom_njit(ga, c, o, h, l, *_cost),
+        "Consensus":   lambda ga: _scan_consensus_njit(ga, c, o, h, l, mas, rsis, *_cost),
     }
     _null_result = (-1, -1e18, 0.0, 0.0, 0, 0)
 

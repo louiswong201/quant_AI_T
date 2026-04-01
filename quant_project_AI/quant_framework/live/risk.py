@@ -35,8 +35,8 @@ class RiskConfig:
     """Static risk limits for pre-trade validation."""
 
     max_order_notional: float = 1_000_000.0
-    max_order_shares: int = 1_000_000
-    max_position_shares: int = 5_000_000
+    max_order_shares: float = 1_000_000.0
+    max_position_shares: float = 5_000_000.0
     allow_short: bool = False
     max_daily_loss_pct: float = 0.05
     max_consecutive_errors: int = 5
